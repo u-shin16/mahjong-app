@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>雀 -JAN- 対局画面UIデモ</title>
+<style>
+/* ============================================================
+   雀卓UIデモ「夜の和風カジノ」
+   ------------------------------------------------------------
+   ● このファイルは「見た目だけ」のデモです（麻雀ロジックなし）
+   ● 色やサイズは下の :root の変数を書き換えるだけで一括変更できます
+   ● 牌のデータは <script> 内の DEMO_DATA を書き換えると表示が変わります
+   ============================================================ */
+
+/* ---------- ① デザイン変数（ここを触ると全体の色が変わる） ---------- */
+:root {
+  /* 背景まわり */
+  --bg-top:      #10131c;   /* 画面上部の背景色 */
+  --bg-bottom:   #05070c;   /* 画面下部の背景色 */
+
+  /* 金色（高級感の要）。少し落ち着いたシャンパンゴールド */
+  --gold:        #d8b45a;
+  --gold-bright: #f3d98b;
+  --gold-dim:    rgba(216, 180, 90, 0.35);
+
+  /* 雀卓の緑 */
+  --felt:        #0d4a34;   /* 卓の基本色 */
+  --felt-light:  #14634682; /* 卓の中央のハイライト */
+  --felt-edge:   #072b1e;   /* 卓のフチの暗い緑 */
+
+  /* 牌 */
+  --tile-face:   #faf6ec;   /* 牌の表面（象牙色） */
+  --tile-side:   #d9d2c0;   /* 牌の側面 */
+  --tile-back:   #1d4f46;   /* 相手の牌の背面色 */
+
+  /* 牌の文字色 */
+  --ink-man:     #a4342c;   /* 萬子（赤茶） */
+  --ink-pin:     #2a5f9e;   /* 筒子（藍） */
+  --ink-sou:     #2c7a4b;   /* 索子（緑） */
+  --ink-honor:   #26221c;   /* 字牌（墨色） */
+  --ink-chun:    #c03028;   /* 中（赤） */
+  --ink-hatsu:   #1f7a3d;   /* 發（緑） */
+
+  /* 手牌の牌サイズ（スマホでも崩れないよう clamp で可変） */
+  --hand-tile-w: clamp(34px, 6.2vmin, 56px);
+  --hand-tile-h: calc(var(--hand-tile-w) * 1.38);
+
+  /* 捨て牌の牌サイズ（小さめ） */
+  --disc-tile-w: clamp(17px, 3.1vmin, 30px);
+  --disc-tile-h: calc(var(--disc-tile-w) * 1.36);
+
+  /* 相手の伏せ牌サイズ */
+  --back-tile-w: clamp(14px, 2.6vmin, 26px);
+  --back-tile-h: calc(var(--back-tile-w) * 1.4);
+}
+
+/* ---------- ② 全体レイアウト ---------- */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;              /* ゲーム画面なのでスクロールさせない */
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
+  color: #e8e2d2;
+  background:
+    /* 上品な金のヴィネット（四隅がほんのり金色に光る） */
+    radial-gradient(120% 90% at 50% -10%, rgba(216,180,90,0.10), transparent 55%),
+    radial-gradient(120% 90% at 50% 110%, rgba(216,180,90,0.07), transparent 55%),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ゲーム全体を包むコンテナ（この中に絶対配置で各パーツを置く） */
+.game {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* iPhoneのノッチ・ホームバーを避ける余白 */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* ============================================================
+   ③ 雀卓（画面中央）
+   ============================================================ */
+.table-wrap {
+  position: absolute;
+  left: 50%;
+  top: 46%;                          /* 手牌ぶん少し上に寄せる */
+  transform: translate(-50%, -50%);
+  /* 正方形に近い卓。縦横どちらにも収まるよう vmin ベース */
+  width: min(72vmin, 86vw);
+  height: min(72vmin, 86vw);
+}
+
+/* 卓の本体。多層の影＋グラデーションで立体感を出す */
+.table {
+  position: absolute;
+  inset: 0;
+  border-radius: 8%;
+  background:
+    /* 中央がふわっと明るいフェルト */
+    radial-gradient(60% 60% at 50% 46%, var(--felt-light), transparent 75%),
+    linear-gradient(160deg, #11563d, var(--felt) 55%, var(--felt-edge));
+  box-shadow:
+    inset 0 0 0 2px rgba(216,180,90,0.55),        /* 内側の金ライン */
+    inset 0 0 0 10px rgba(7, 43, 30, 0.9),        /* 金ラインの外の木枠風 */
+    inset 0 0 60px rgba(0,0,0,0.55),              /* フェルトの落ち込み */
+    0 18px 50px rgba(0,0,0,0.65),                 /* 卓自体の影（浮遊感） */
+    0 2px 0 rgba(216,180,90,0.25);                /* フチの金の反射 */
+}
+
+/* 卓の中央エンブレム（雀の文字＋金の輪） */
+.table-emblem {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 17%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: "Hiragino Mincho ProN", "Yu Mincho", serif;
+  font-size: clamp(18px, 4.4vmin, 42px);
+  color: var(--gold-dim);
+  border: 1px solid rgba(216,180,90,0.30);
+  box-shadow: inset 0 0 24px rgba(0,0,0,0.35), 0 0 18px rgba(216,180,90,0.10);
+  letter-spacing: 0.1em;
+  pointer-events: none;
+}
+
+/* ---------- 捨て牌ゾーン（卓の中に4方向） ---------- */
+/* 6枚 × 3段 のグリッド。各プレイヤーの捨て牌が並ぶ */
+.discards {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(6, var(--disc-tile-w));
+  gap: 2px;
+  justify-content: center;
+}
+.discards.bottom { left: 50%; bottom: 12%; transform: translateX(-50%); }
+.discards.top    { left: 50%; top: 12%;    transform: translateX(-50%) rotate(180deg); }
+.discards.left   { left: 12%; top: 50%;    transform: translate(-0%, -50%) rotate(90deg);  transform-origin: center; }
+.discards.right  { right: 12%; top: 50%;   transform: translate(0%, -50%) rotate(-90deg); transform-origin: center; }
+
+/* ============================================================
+   ④ 牌の見た目（本物っぽさの核心部分）
+   ============================================================ */
+/* 牌1枚の共通スタイル。上面（象牙）＋側面（下の厚み）＋影 */
+.tile {
+  position: relative;
+  width: var(--disc-tile-w);
+  height: var(--disc-tile-h);
+  border-radius: 14%;
+  background: linear-gradient(170deg, #fffdf6 0%, var(--tile-face) 45%, #ece5d3 100%);
+  /* 下側に牌の「厚み」と接地影を重ねる */
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.9),        /* 上面のハイライト */
+    0 3px 0 var(--tile-side),                      /* 牌の厚み */
+    0 5px 6px rgba(0,0,0,0.45);                    /* 接地影 */
+  display: grid;
+  place-items: center;
+  font-family: "Hiragino Mincho ProN", "Yu Mincho", serif;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* 牌の中の文字（数字＋種類を縦に重ねる）
+   t-inner は文字をまとめる箱。横向き牌のときはこの箱ごと回転させる */
+.tile .t-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.tile .t-num  { font-size: calc(var(--disc-tile-w) * 0.52); }
+.tile .t-suit { font-size: calc(var(--disc-tile-w) * 0.40); margin-top: 1px; }
+
+/* 種類ごとの文字色 */
+.tile.man   { color: var(--ink-man); }
+.tile.pin   { color: var(--ink-pin); }
+.tile.sou   { color: var(--ink-sou); }
+.tile.wind  { color: var(--ink-honor); }
+.tile.haku  { color: #b9b2a2; }      /* 白：うっすら枠だけ見せる */
+.tile.hatsu { color: var(--ink-hatsu); }
+.tile.chun  { color: var(--ink-chun); }
+
+/* 字牌は1文字を大きく */
+.tile.wind .t-num, .tile.haku .t-num, .tile.hatsu .t-num, .tile.chun .t-num {
+  font-size: calc(var(--disc-tile-w) * 0.62);
+}
+
+/* リーチ宣言牌（横向きの捨て牌）。金の光をまとわせる */
+.tile.riichi-tile {
+  transform: rotate(90deg);
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.9),
+    0 3px 0 var(--tile-side),
+    0 0 12px rgba(216,180,90,0.8);
+}
+
+/* ---------- 自分の手牌用（大きい牌） ---------- */
+.hand .tile {
+  width: var(--hand-tile-w);
+  height: var(--hand-tile-h);
+  cursor: pointer;
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+.hand .tile .t-num  { font-size: calc(var(--hand-tile-w) * 0.50); }
+.hand .tile .t-suit { font-size: calc(var(--hand-tile-w) * 0.38); }
+.hand .tile.wind .t-num, .hand .tile.haku .t-num,
+.hand .tile.hatsu .t-num, .hand .tile.chun .t-num {
+  font-size: calc(var(--hand-tile-w) * 0.60);
+}
+
+/* 手牌にマウスを乗せると少し浮く（タップ可能感） */
+.hand .tile:hover { transform: translateY(-8px); }
+
+/* 選択中の牌：大きく浮き上がり＋金の強い発光＋点滅する▼マーカー
+   （ひと目で「今この牌を選んでいる」と分かる見た目にする） */
+.hand .tile.selected {
+  transform: translateY(-20px) scale(1.12);   /* 大きく浮かせて少し拡大 */
+  z-index: 2;                                  /* 隣の牌より手前に */
+  background: linear-gradient(170deg, #fffef9 0%, #fdf8e8 45%, #f3ecd6 100%);  /* 表面も明るく */
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.9),
+    0 3px 0 var(--tile-side),
+    0 0 0 3px var(--gold-bright),              /* 太い金縁 */
+    0 0 22px rgba(243,217,139,0.95),           /* 強い金の光 */
+    0 14px 18px rgba(0,0,0,0.5);               /* 浮いたぶんの落ち影 */
+  animation: selectedPulse 1.1s ease-in-out infinite;
+}
+
+/* 選択牌の光がゆっくり脈打つ */
+@keyframes selectedPulse {
+  0%, 100% { box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.9),
+    0 3px 0 var(--tile-side),
+    0 0 0 3px var(--gold-bright),
+    0 0 14px rgba(243,217,139,0.6),
+    0 14px 18px rgba(0,0,0,0.5); }
+  50% { box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.9),
+    0 3px 0 var(--tile-side),
+    0 0 0 3px var(--gold-bright),
+    0 0 30px rgba(243,217,139,1),
+    0 14px 18px rgba(0,0,0,0.5); }
+}
+
+/* 選択牌の真上に出る「▼」マーカー（ぴょこぴょこ跳ねる） */
+.hand .tile.selected::after {
+  content: '▼';
+  position: absolute;
+  left: 50%;
+  top: calc(-0.9em - 6px);
+  transform: translateX(-50%);
+  font-size: calc(var(--hand-tile-w) * 0.42);
+  color: var(--gold-bright);
+  text-shadow: 0 0 8px rgba(243,217,139,0.9), 0 2px 4px rgba(0,0,0,0.6);
+  animation: markerBounce 0.7s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes markerBounce {
+  0%, 100% { transform: translateX(-50%) translateY(0); }
+  50%      { transform: translateX(-50%) translateY(-5px); }
+}
+
+/* ---------- 相手の伏せ牌（背面） ---------- */
+.tile-back {
+  width: var(--back-tile-w);
+  height: var(--back-tile-h);
+  border-radius: 16%;
+  background:
+    linear-gradient(160deg, #2a6b5e, var(--tile-back) 60%, #123830);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.25),
+    inset 0 0 0 1px rgba(216,180,90,0.28),   /* 背面の金の縁取り */
+    0 2px 0 #0c2822,
+    0 4px 5px rgba(0,0,0,0.5);
+}
+
+/* ============================================================
+   ⑤ プレイヤー表示（4人ぶん）
+   ============================================================ */
+/* 名前と点数のプレート（共通） */
+.nameplate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(28,32,44,0.92), rgba(14,17,25,0.92));
+  border: 1px solid rgba(216,180,90,0.28);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+  font-size: clamp(11px, 1.9vmin, 14px);
+  white-space: nowrap;
+}
+.nameplate .wind-badge {
+  display: grid;
+  place-items: center;
+  width: 1.7em; height: 1.7em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #23483a, #0d2b21);
+  border: 1px solid rgba(216,180,90,0.5);
+  font-family: "Hiragino Mincho ProN", serif;
+  color: var(--gold-bright);
+  font-size: 0.9em;
+}
+.nameplate .p-name  { font-weight: 700; letter-spacing: 0.04em; }
+.nameplate .p-score { color: var(--gold-bright); font-variant-numeric: tabular-nums; }
+
+/* ▼手番中プレイヤーのプレートは金色に呼吸するように光る */
+.nameplate.active {
+  border-color: var(--gold);
+  animation: turnGlow 1.8s ease-in-out infinite;
+}
+@keyframes turnGlow {
+  0%, 100% { box-shadow: 0 4px 14px rgba(0,0,0,0.5), 0 0 10px rgba(216,180,90,0.35); }
+  50%      { box-shadow: 0 4px 14px rgba(0,0,0,0.5), 0 0 26px rgba(216,180,90,0.85); }
+}
+
+/* --- 対面（上） --- */
+.seat-top {
+  position: absolute;
+  top: 1.4%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 3;
+}
+.seat-top .backs { display: flex; gap: 2px; }
+
+/* --- 左プレイヤー --- */
+.seat-left {
+  position: absolute;
+  left: 1%;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 3;
+}
+.seat-left .backs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* 縦持ちの牌に見えるよう横長にする */
+.seat-left .tile-back, .seat-right .tile-back {
+  width: var(--back-tile-h);
+  height: var(--back-tile-w);
+}
+.seat-left .nameplate {
+  writing-mode: vertical-rl;      /* 名前プレートを縦書きに */
+  padding: 14px 6px;
+}
+.seat-left .nameplate .wind-badge { writing-mode: horizontal-tb; }
+
+/* --- 右プレイヤー --- */
+.seat-right {
+  position: absolute;
+  right: 1%;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 6px;
+  z-index: 3;
+}
+.seat-right .backs { display: flex; flex-direction: column; gap: 2px; }
+.seat-right .nameplate {
+  writing-mode: vertical-rl;
+  padding: 14px 6px;
+}
+.seat-right .nameplate .wind-badge { writing-mode: horizontal-tb; }
+
+/* ============================================================
+   ⑥ 自分の手牌（画面下）
+   ============================================================ */
+.my-area {
+  position: absolute;
+  left: 50%;
+  bottom: calc(1.6% + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-end;
+  gap: clamp(6px, 1.6vmin, 14px);
+  z-index: 5;
+}
+.hand { display: flex; gap: clamp(2px, 0.5vmin, 5px); }
+
+/* ツモってきた牌は1枚だけ右に離して置く（麻雀の慣習） */
+.drawn-gap { width: clamp(8px, 2vmin, 18px); }
+
+/* ============================================================
+   ⑥b 副露（フーロ）エリア＝鳴いた牌の表示
+   ------------------------------------------------------------
+   ● --tw / --th … 副露牌1枚の幅と高さ。エリアごとに変えられる
+   ● .lying      … 横向きに寝かせた牌（＝鳴いて取得した牌）
+   ● .facedown   … 伏せ牌（暗槓の両端で使用）
+   ● .kakan-slot … 加槓用。横向き牌を2枚重ねるスロット
+   ============================================================ */
+
+/* --- 副露エリアの共通設定 --- */
+.melds {
+  display: flex;
+  align-items: flex-end;
+}
+
+/* 自分の副露（手牌の右側・手牌よりひとまわり小さい） */
+.melds.me {
+  --tw: clamp(24px, 4.4vmin, 42px);
+  --th: calc(var(--tw) * 1.38);
+  gap: clamp(6px, 1.2vmin, 12px);
+  margin-left: clamp(8px, 2vmin, 20px);
+}
+
+/* 対面の副露（伏せ牌の横・小さめ） */
+.melds.opp-top {
+  --tw: clamp(15px, 2.8vmin, 26px);
+  --th: calc(var(--tw) * 1.38);
+  gap: 6px;
+}
+
+/* 左右プレイヤーの副露（縦積み・小さめ） */
+.melds.opp-side {
+  --tw: clamp(15px, 2.8vmin, 26px);
+  --th: calc(var(--tw) * 1.38);
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 対面の「伏せ牌＋副露」を横に並べるための行 */
+.seat-top .top-hand-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+/* --- 副露1セット（ポン・チーなど） --- */
+.meld {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+/* 縦向きの副露（左右プレイヤー用）。牌を縦に積む */
+.meld.v {
+  flex-direction: column;
+  align-items: center;
+}
+
+/* --- 副露エリア内の牌サイズ --- */
+.melds .tile {
+  width: var(--tw);
+  height: var(--th);
+  cursor: default;
+  /* 手牌より小さいので厚み・影も控えめにする */
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.9),
+    0 2px 0 var(--tile-side),
+    0 4px 5px rgba(0,0,0,0.45);
+}
+.melds .t-num  { font-size: calc(var(--tw) * 0.52); }
+.melds .t-suit { font-size: calc(var(--tw) * 0.40); }
+.melds .tile.wind .t-num, .melds .tile.haku .t-num,
+.melds .tile.hatsu .t-num, .melds .tile.chun .t-num {
+  font-size: calc(var(--tw) * 0.62);
+}
+
+/* --- 横向きの牌（＝鳴いて取得した牌） ---
+   幅と高さを入れ替えた「寝ている牌」を作り、
+   中の文字だけ90度回転させる（レイアウトが崩れない方式） */
+.melds .tile.lying {
+  width: var(--th);
+  height: var(--tw);
+}
+.melds .tile.lying .t-inner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--tw);
+  height: var(--th);
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+/* --- 伏せ牌（暗槓の両端） --- */
+.melds .tile.facedown {
+  background: linear-gradient(160deg, #2a6b5e, var(--tile-back) 60%, #123830);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.25),
+    inset 0 0 0 1px rgba(216,180,90,0.28),
+    0 2px 0 #0c2822,
+    0 4px 5px rgba(0,0,0,0.5);
+}
+.melds .tile.facedown .t-inner { display: none; }   /* 伏せ牌は文字を見せない */
+
+/* --- 加槓スロット（横向き牌を2枚上下に重ねる） ---
+   下＝ポンで鳴いた牌／上＝あとから加えた4枚目
+   上の牌を少し浮かせて「積んだ」感を出す */
+.kakan-slot {
+  position: relative;
+  width: var(--th);              /* 横向き牌の幅ぶん確保 */
+  height: var(--th);
+}
+.kakan-slot .tile.lying {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.kakan-slot .tile.lying:first-child { bottom: 0; }
+.kakan-slot .tile.lying:last-child  {
+  bottom: calc(var(--tw) * 0.78);   /* 少し重ねて上にずらす */
+  z-index: 1;
+}
+
+/* 縦向きの副露で加槓が出た場合（左右プレイヤー用）：
+   縦積みの列に対して、立てた牌を2枚左右に重ねる */
+.meld.v .kakan-slot {
+  width: calc(var(--tw) * 1.75);
+  height: var(--th);
+}
+.meld.v .kakan-slot .tile {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.meld.v .kakan-slot .tile:first-child { left: 0; }
+.meld.v .kakan-slot .tile:last-child  { left: calc(var(--tw) * 0.75); z-index: 1; }
+
+/* ============================================================
+   ⑦ HUD（画面の四隅の情報）
+   ============================================================ */
+/* --- 右上：局情報・ドラ・残り牌数 --- */
+.hud-info {
+  position: absolute;
+  top: calc(1.4% + env(safe-area-inset-top));
+  right: calc(1.2% + env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(24,28,40,0.92), rgba(12,15,22,0.92));
+  border: 1px solid rgba(216,180,90,0.30);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  z-index: 6;
+  font-size: clamp(11px, 1.9vmin, 14px);
+}
+.hud-info .round {
+  font-family: "Hiragino Mincho ProN", serif;
+  font-size: 1.25em;
+  color: var(--gold-bright);
+  letter-spacing: 0.15em;
+  text-align: center;
+}
+.hud-info .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+.hud-info .label { color: #9fb4a8; font-size: 0.85em; }
+.hud-info .dora-tiles { display: flex; gap: 3px; }
+.hud-info .wall-count { color: var(--gold-bright); font-variant-numeric: tabular-nums; }
+
+/* --- 左下：自分の情報 --- */
+.hud-me {
+  position: absolute;
+  left: calc(1.2% + env(safe-area-inset-left));
+  bottom: calc(1.6% + env(safe-area-inset-bottom));
+  z-index: 6;
+}
+
+/* ============================================================
+   ⑧ 操作ボタン（右下）
+   ============================================================ */
+.actions {
+  position: absolute;
+  right: calc(1.2% + env(safe-area-inset-right));
+  bottom: calc(1.6% + env(safe-area-inset-bottom));
+  display: flex;
+  flex-wrap: wrap;               /* 画面が狭いときは自動で2段に折り返す */
+  justify-content: flex-end;
+  gap: clamp(6px, 1.2vmin, 10px);
+  max-width: min(46vw, 420px);
+  z-index: 7;
+}
+
+/* ボタン共通。押せる感を最優先（立体・ハイライト・押し込み） */
+.btn {
+  min-width: clamp(58px, 10vmin, 92px);
+  padding: clamp(8px, 1.6vmin, 13px) clamp(10px, 2vmin, 18px);
+  border: 1px solid rgba(216,180,90,0.55);
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: clamp(13px, 2.2vmin, 17px);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--gold-bright);
+  background: linear-gradient(180deg, #2a3040, #171c28 55%, #10141d);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.14),   /* 上面ハイライト */
+    0 4px 0 #090c12,                          /* ボタンの厚み */
+    0 8px 14px rgba(0,0,0,0.5);
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+/* ホバーで金色に光る */
+.btn:hover {
+  filter: brightness(1.15);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.2),
+    0 4px 0 #090c12,
+    0 0 18px rgba(216,180,90,0.55),
+    0 8px 14px rgba(0,0,0,0.5);
+}
+
+/* 押した瞬間は沈み込む */
+.btn:active {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.1),
+    0 1px 0 #090c12,
+    0 3px 8px rgba(0,0,0,0.5);
+}
+
+/* アガリ系（ツモ・ロン）は金色で最重要感を出す */
+.btn.primary {
+  color: #1c1608;
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold) 55%, #a8863b);
+  border-color: #f7e6b0;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.35);
+}
+.btn.primary:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.4),
+    0 4px 0 #6d5a26,
+    0 0 26px rgba(243,217,139,0.8),
+    0 8px 14px rgba(0,0,0,0.5);
+}
+.btn.primary:active { transform: translateY(3px); }
+
+/* リーチは赤系の差し色（和風カジノの緋色） */
+.btn.riichi {
+  color: #ffe9e4;
+  background: linear-gradient(180deg, #b8433a, #8c2f28 55%, #6d221d);
+  border-color: #e9a49b;
+}
+
+/* パスは控えめに */
+.btn.pass { opacity: 0.85; }
+
+/* ============================================================
+   ⑨ トースト（ボタンを押したときの演出。デモ用）
+   ============================================================ */
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  transform: translate(-50%, -50%) scale(0.8);
+  padding: 14px 42px;
+  border-radius: 14px;
+  font-family: "Hiragino Mincho ProN", serif;
+  font-size: clamp(26px, 6vmin, 52px);
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  color: var(--gold-bright);
+  background: rgba(10, 12, 18, 0.88);
+  border: 1px solid var(--gold);
+  box-shadow: 0 0 40px rgba(216,180,90,0.5), 0 10px 40px rgba(0,0,0,0.7);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 20;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* ============================================================
+   ⑩ レスポンシブ調整（スマホ縦持ちなど）
+   ============================================================ */
+@media (max-width: 640px) {
+  /* 卓を少し上に・小さめにして手牌とボタンの場所を確保 */
+  .table-wrap { top: 42%; width: min(66vmin, 94vw); height: min(66vmin, 94vw); }
+
+  /* 左右プレイヤーの伏せ牌は減らして名前だけ目立たせる */
+  .seat-left .backs .tile-back:nth-child(n+8),
+  .seat-right .backs .tile-back:nth-child(n+8) { display: none; }
+
+  /* 操作ボタンは画面幅いっぱい使って折り返す */
+  .actions { max-width: 60vw; }
+
+  /* HUDを少しコンパクトに */
+  .hud-info { padding: 8px 10px; }
+
+  /* 副露牌も小さくして手牌スペースを守る */
+  .melds.me { --tw: clamp(17px, 4.4vw, 26px); margin-left: 6px; gap: 5px; }
+  .melds.opp-top, .melds.opp-side { --tw: clamp(12px, 2.4vmin, 20px); }
+  .seat-top .top-hand-row { gap: 6px; }
+}
+
+/* 横幅がかなり狭い端末ではさらに縮める */
+@media (max-width: 400px) {
+  :root {
+    --hand-tile-w: clamp(26px, 6.8vw, 34px);
+  }
+  .actions .btn { min-width: 52px; }
+}
+</style>
+</head>
+<body>
+
+<div class="game" id="game">
+
+  <!-- ==================== 雀卓（中央） ==================== -->
+  <div class="table-wrap">
+    <div class="table"></div>
+    <div class="table-emblem">雀</div>
+
+    <!-- 捨て牌（4方向）。中身はJSがDEMO_DATAから生成する -->
+    <div class="discards bottom" id="discBottom"></div>
+    <div class="discards top"    id="discTop"></div>
+    <div class="discards left"   id="discLeft"></div>
+    <div class="discards right"  id="discRight"></div>
+  </div>
+
+  <!-- ==================== 対面プレイヤー（上） ==================== -->
+  <div class="seat-top">
+    <div class="nameplate" id="npTop">
+      <span class="wind-badge">西</span>
+      <span class="p-name">月光</span>
+      <span class="p-score">25,000</span>
+    </div>
+    <!-- 伏せ牌と副露を横並びにする行 -->
+    <div class="top-hand-row">
+      <div class="backs" id="backsTop"></div>
+      <div class="melds opp-top" id="meldsTop"></div>
+    </div>
+  </div>
+
+  <!-- ==================== 左プレイヤー ==================== -->
+  <div class="seat-left">
+    <div class="nameplate" id="npLeft">
+      <span class="wind-badge">南</span>
+      <span class="p-name">胡蝶</span>
+      <span class="p-score">25,000</span>
+    </div>
+    <div class="backs" id="backsLeft"></div>
+    <div class="melds opp-side" id="meldsLeft"></div>   <!-- 左プレイヤーの副露 -->
+  </div>
+
+  <!-- ==================== 右プレイヤー ==================== -->
+  <div class="seat-right">
+    <div class="nameplate" id="npRight">
+      <span class="wind-badge">北</span>
+      <span class="p-name">白露</span>
+      <span class="p-score">25,000</span>
+    </div>
+    <div class="backs" id="backsRight"></div>
+    <div class="melds opp-side" id="meldsRight"></div>  <!-- 右プレイヤーの副露 -->
+  </div>
+
+  <!-- ==================== 右上HUD：局情報・ドラ・残り牌 ==================== -->
+  <div class="hud-info">
+    <div class="round">東 二 局</div>
+    <div class="row">
+      <span class="label">ドラ</span>
+      <span class="dora-tiles" id="doraTiles"></span>
+    </div>
+    <div class="row">
+      <span class="label">残り牌</span>
+      <span class="wall-count" id="wallCount">70</span>
+    </div>
+  </div>
+
+  <!-- ==================== 左下HUD：自分の情報 ==================== -->
+  <div class="hud-me">
+    <div class="nameplate active" id="npMe">
+      <span class="wind-badge">東</span>
+      <span class="p-name">あなた</span>
+      <span class="p-score">25,000</span>
+    </div>
+  </div>
+
+  <!-- ==================== 自分の手牌（下） ==================== -->
+  <div class="my-area">
+    <div class="hand" id="myHand"></div>
+    <div class="drawn-gap"></div>
+    <div class="hand" id="myDrawn"></div>  <!-- ツモ牌（1枚） -->
+    <div class="melds me" id="meldsMe"></div>  <!-- 自分の副露（鳴いたセット） -->
+  </div>
+
+  <!-- ==================== 操作ボタン（右下） ==================== -->
+  <div class="actions" id="actions">
+    <!-- data-label はトースト表示用の文字 -->
+    <button class="btn primary" data-label="ツモ">ツモ</button>
+    <button class="btn primary" data-label="ロン">ロン</button>
+    <button class="btn riichi"  data-label="リーチ">リーチ</button>
+    <button class="btn" data-label="ポン">ポン</button>
+    <button class="btn" data-label="チー">チー</button>
+    <button class="btn" data-label="カン">カン</button>
+    <button class="btn pass" data-label="パス">パス</button>
+  </div>
+
+  <!-- ==================== 発声トースト（演出用） ==================== -->
+  <div class="toast" id="toast">ロン</div>
+
+</div>
+
+<script>
+/* ============================================================
+   デモ用スクリプト
+   ------------------------------------------------------------
+   ● 麻雀ロジックはありません。「表示するだけ」です。
+   ● 手牌・捨て牌を変えたいときは、下の DEMO_DATA を書き換えて
+     ブラウザをリロードしてください。
+   ============================================================ */
+
+/* ---------- ① 牌データの書き方 ----------
+   1枚の牌は { s: 種類, n: 数字 } で表します。
+     s: 'man'=萬子  'pin'=筒子  'sou'=索子
+        'wind'=風牌(n: 1東 2南 3西 4北)
+        'dragon'=三元牌(n: 1白 2發 3中)
+   例: {s:'man', n:3} → 三萬
+--------------------------------------------- */
+const DEMO_DATA = {
+  /* 自分の手牌
+     ※3回鳴いている想定なので手牌は4枚（13 - 3×3 = 4枚） */
+  myHand: [
+    {s:'sou',n:5},{s:'sou',n:6},{s:'sou',n:7},
+    {s:'pin',n:5},
+  ],
+  /* ツモってきた牌（1枚） */
+  myDrawn: {s:'pin',n:5},
+
+  /* 各プレイヤーの捨て牌（riichi:true を付けるとその牌が横向きに光る） */
+  discards: {
+    bottom: [   /* 自分 */
+      {s:'wind',n:4},{s:'dragon',n:1},{s:'pin',n:9},{s:'sou',n:1},
+      {s:'man',n:9},{s:'wind',n:3},{s:'pin',n:1},{s:'sou',n:9},
+    ],
+    top: [      /* 対面 */
+      {s:'wind',n:1},{s:'sou',n:2},{s:'man',n:5},{s:'pin',n:7},
+      {s:'dragon',n:2},{s:'sou',n:8},{s:'man',n:1},
+    ],
+    left: [     /* 左 */
+      {s:'pin',n:2},{s:'wind',n:2},{s:'sou',n:3},{s:'man',n:6},
+      {s:'pin',n:8},{s:'sou',n:4, riichi:true},   /* ←リーチ宣言牌の例 */
+    ],
+    right: [    /* 右 */
+      {s:'dragon',n:1},{s:'man',n:4},{s:'wind',n:3},{s:'pin',n:3},
+      {s:'sou',n:6},{s:'man',n:2},{s:'pin',n:5},
+    ],
+  },
+
+  /* ドラ表示牌 */
+  dora: [{s:'man',n:5}],
+
+  /* 相手の手牌の枚数（伏せ牌の数）
+     ※全員1回ずつ鳴いている想定で10枚 */
+  backCounts: { top: 10, left: 10, right: 10 },
+};
+
+/* ---------- ①b 副露（鳴き）データの書き方 ----------
+   1セット = { type, tiles, from, calledIdx }
+
+   type  : 鳴きの種類
+     'pon'    = ポン   （3枚。鳴いた牌だけ横向き）
+     'chi'    = チー   （3枚。取った牌だけ横向き）
+     'minkan' = 明槓   （4枚。鳴いた牌だけ横向き）
+     'ankan'  = 暗槓   （4枚。両端が伏せ牌・中央2枚が表）
+     'kakan'  = 加槓   （4枚。ポンの横向き牌の上に4枚目を重ねる）
+
+   tiles : セットの牌（ポン=3枚 / 槓=4枚）
+
+   from  : 誰の捨て牌を鳴いたか → 横向き牌の位置が変わる
+     'left'  = 上家（左）  → 左端が横向き
+     'top'   = 対面        → 真ん中が横向き
+     'right' = 下家（右）  → 右端が横向き
+     （暗槓は自分の牌だけなので from 不要）
+
+   calledIdx : tiles の何番目を「鳴いた牌」にするか（省略時は0）
+               チーでどの牌を取ったか示すときに使う
+
+   ※新しい鳴きの種類を増やしたいときは、
+     meldHtml() に type の分岐を1つ追加するだけでOK
+--------------------------------------------- */
+const MELD_DATA = {
+  /* 自分：ポン（白）／チー（三四五萬・三萬を取得）／加槓（東） */
+  me: [
+    { type:'pon',   tiles:[{s:'dragon',n:1},{s:'dragon',n:1},{s:'dragon',n:1}], from:'top' },
+    { type:'chi',   tiles:[{s:'man',n:3},{s:'man',n:4},{s:'man',n:5}], from:'left', calledIdx:0 },
+    { type:'kakan', tiles:[{s:'wind',n:1},{s:'wind',n:1},{s:'wind',n:1},{s:'wind',n:1}], from:'right' },
+  ],
+  /* 左プレイヤー：ポン（發） */
+  left: [
+    { type:'pon', tiles:[{s:'dragon',n:2},{s:'dragon',n:2},{s:'dragon',n:2}], from:'top' },
+  ],
+  /* 右プレイヤー：明槓（九筒） */
+  right: [
+    { type:'minkan', tiles:[{s:'pin',n:9},{s:'pin',n:9},{s:'pin',n:9},{s:'pin',n:9}], from:'left' },
+  ],
+  /* 対面プレイヤー：暗槓（一索） */
+  top: [
+    { type:'ankan', tiles:[{s:'sou',n:1},{s:'sou',n:1},{s:'sou',n:1},{s:'sou',n:1}] },
+  ],
+};
+
+/* ---------- ② 牌1枚をHTMLにする関数 ---------- */
+const NUM_KANJI = ['', '一','二','三','四','五','六','七','八','九'];
+const WIND_KANJI = ['', '東','南','西','北'];
+const DRAGON_KANJI = ['', '白','發','中'];
+
+/* opts（省略可）:
+     lying:true    → 横向きの牌にする（鳴いた牌）
+     facedown:true → 伏せ牌にする（暗槓の両端） */
+function tileHtml(t, opts) {
+  opts = opts || {};
+  let cls = '', num = '', suit = '';
+  if (t.s === 'man')    { cls = 'man'; num = NUM_KANJI[t.n]; suit = '萬'; }
+  if (t.s === 'pin')    { cls = 'pin'; num = t.n;            suit = '筒'; }
+  if (t.s === 'sou')    { cls = 'sou'; num = t.n;            suit = '索'; }
+  if (t.s === 'wind')   { cls = 'wind'; num = WIND_KANJI[t.n]; }
+  if (t.s === 'dragon') {
+    cls = ['','haku','hatsu','chun'][t.n];
+    num = DRAGON_KANJI[t.n];
+  }
+  if (t.riichi)       cls += ' riichi-tile';
+  if (opts.lying)     cls += ' lying';
+  if (opts.facedown)  cls += ' facedown';
+
+  return '<div class="tile ' + cls + '">' +
+           '<div class="t-inner">' +
+             '<span class="t-num">' + num + '</span>' +
+             (suit ? '<span class="t-suit">' + suit + '</span>' : '') +
+           '</div>' +
+         '</div>';
+}
+
+/* ---------- ②b 副露1セットをHTMLにする関数 ----------
+   orient: 'h' = 横並び（自分・対面用）
+           'v' = 縦積み（左右プレイヤー用）
+   縦積みのときは通常の牌を寝かせ、鳴いた牌だけ立てることで
+   「向きの違い＝鳴いた牌」がどの向きでも成立するようにしている */
+const MELD_LABELS = { pon:'ポン', chi:'チー', minkan:'明槓', ankan:'暗槓', kakan:'加槓' };
+
+function meldHtml(meld, orient) {
+  const v = orient === 'v';
+  const t = meld.tiles;
+  let cells;
+
+  if (meld.type === 'ankan') {
+    /* 暗槓：両端を伏せ牌にして、中央2枚だけ表向き */
+    cells = [
+      tileHtml(t[0], { lying: v, facedown: true }),
+      tileHtml(t[1], { lying: v }),
+      tileHtml(t[2], { lying: v }),
+      tileHtml(t[3], { lying: v, facedown: true }),
+    ];
+  } else {
+    /* 鳴いた牌（向きを変える牌）と、それ以外の牌に分ける */
+    const calledIdx = meld.calledIdx != null ? meld.calledIdx : 0;
+    const called = t[calledIdx];
+    let rest = t.filter(function(_, i) { return i !== calledIdx; });
+
+    /* 加槓：4枚目は「重ね表示」用に取り分けておく */
+    let added = null;
+    if (meld.type === 'kakan') added = rest.pop();
+
+    /* 誰から鳴いたか → 横向き牌を置く位置
+       left(上家)=先頭 / top(対面)=2番目 / right(下家)=末尾 */
+    const from = meld.from || 'left';
+    const pos = from === 'left' ? 0 : from === 'top' ? 1 : rest.length;
+
+    /* 鳴いた牌のセルを作る（加槓は2枚重ねのスロット） */
+    let calledCell;
+    if (meld.type === 'kakan') {
+      calledCell = '<div class="kakan-slot">' +
+        tileHtml(called, { lying: !v }) +   /* 下：ポンで鳴いた牌 */
+        tileHtml(added,  { lying: !v }) +   /* 上：あとで加えた4枚目 */
+      '</div>';
+    } else {
+      calledCell = tileHtml(called, { lying: !v });
+    }
+
+    cells = rest.map(function(x) { return tileHtml(x, { lying: v }); });
+    cells.splice(pos, 0, calledCell);
+  }
+
+  /* title属性でマウスオーバー時に鳴きの種類が分かる */
+  return '<div class="meld ' + meld.type + (v ? ' v' : '') + '" title="' +
+         (MELD_LABELS[meld.type] || '') + '">' + cells.join('') + '</div>';
+}
+
+/* 副露エリア1つぶん（複数セット）をまとめて描画 */
+function renderMelds(id, melds, orient) {
+  document.getElementById(id).innerHTML =
+    melds.map(function(m) { return meldHtml(m, orient); }).join('');
+}
+
+/* ---------- ③ 画面に描画する ---------- */
+/* 自分の手牌 */
+document.getElementById('myHand').innerHTML =
+  DEMO_DATA.myHand.map(t => tileHtml(t)).join('');
+
+/* ツモ牌 */
+document.getElementById('myDrawn').innerHTML = tileHtml(DEMO_DATA.myDrawn);
+
+/* 捨て牌（4方向） */
+document.getElementById('discBottom').innerHTML = DEMO_DATA.discards.bottom.map(t => tileHtml(t)).join('');
+document.getElementById('discTop').innerHTML    = DEMO_DATA.discards.top.map(t => tileHtml(t)).join('');
+document.getElementById('discLeft').innerHTML   = DEMO_DATA.discards.left.map(t => tileHtml(t)).join('');
+document.getElementById('discRight').innerHTML  = DEMO_DATA.discards.right.map(t => tileHtml(t)).join('');
+
+/* ドラ表示 */
+document.getElementById('doraTiles').innerHTML =
+  DEMO_DATA.dora.map(t => tileHtml(t)).join('');
+
+/* 相手の伏せ牌 */
+function renderBacks(id, count) {
+  document.getElementById(id).innerHTML =
+    Array.from({length: count}, () => '<div class="tile-back"></div>').join('');
+}
+renderBacks('backsTop',   DEMO_DATA.backCounts.top);
+renderBacks('backsLeft',  DEMO_DATA.backCounts.left);
+renderBacks('backsRight', DEMO_DATA.backCounts.right);
+
+/* 副露エリア（自分と対面は横並び、左右プレイヤーは縦積み） */
+renderMelds('meldsMe',    MELD_DATA.me,    'h');
+renderMelds('meldsTop',   MELD_DATA.top,   'h');
+renderMelds('meldsLeft',  MELD_DATA.left,  'v');
+renderMelds('meldsRight', MELD_DATA.right, 'v');
+
+/* ---------- ④ 手牌タップで選択（浮き上がる） ---------- */
+document.querySelectorAll('#myHand .tile, #myDrawn .tile').forEach(el => {
+  el.addEventListener('click', () => {
+    /* 他の牌の選択を外して自分だけ選択 */
+    document.querySelectorAll('.hand .tile.selected')
+      .forEach(s => s.classList.remove('selected'));
+    el.classList.add('selected');
+  });
+});
+
+/* ---------- ⑤ 操作ボタン → 発声トースト表示（デモ演出） ---------- */
+const toast = document.getElementById('toast');
+let toastTimer = null;
+document.querySelectorAll('.actions .btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    toast.textContent = btn.dataset.label + '！';
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 900);
+  });
+});
+
+/* ---------- ⑥ 手番が回っていくデモ演出 ----------
+   3秒ごとに「光る名前プレート」が 自分→右→対面→左 の順に移動します。
+   本実装ではゲームロジックから active を付け替えてください。 */
+const turnOrder = ['npMe', 'npRight', 'npTop', 'npLeft'];
+let turnIdx = 0;
+setInterval(() => {
+  document.getElementById(turnOrder[turnIdx]).classList.remove('active');
+  turnIdx = (turnIdx + 1) % turnOrder.length;
+  document.getElementById(turnOrder[turnIdx]).classList.add('active');
+}, 3000);
+
+/* ---------- ⑦ 残り牌数が減っていくデモ演出 ---------- */
+let wall = 70;
+setInterval(() => {
+  wall = wall > 14 ? wall - 1 : 70;   /* 14枚を切ったらリセット */
+  document.getElementById('wallCount').textContent = wall;
+}, 3000);
+</script>
+
+</body>
+</html>

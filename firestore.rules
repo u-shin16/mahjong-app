@@ -1,0 +1,107 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function changedOnly(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    function validRoomData(data) {
+      return data.playerCount in [3, 4]
+        && data.players is list
+        && data.playerUids is list
+        && data.players.size() == data.playerUids.size()
+        && data.players.size() <= data.playerCount;
+    }
+
+    function isHost() {
+      return signedIn() && resource.data.hostUid == request.auth.uid;
+    }
+
+    function isParticipant() {
+      return signedIn()
+        && resource.data.playerUids is list
+        && request.auth.uid in resource.data.playerUids;
+    }
+
+    function isJoiningSelf() {
+      return resource.data.status == 'waiting'
+        && changedOnly(['players', 'playerUids'])
+        && validRoomData(request.resource.data)
+        && request.resource.data.playerUids.size() == resource.data.playerUids.size() + 1
+        && !(request.auth.uid in resource.data.playerUids)
+        && request.auth.uid in request.resource.data.playerUids;
+    }
+
+    function isLeavingSelf() {
+      return resource.data.status == 'waiting'
+        && changedOnly(['players', 'playerUids'])
+        && validRoomData(request.resource.data)
+        && request.resource.data.playerUids.size() == resource.data.playerUids.size() - 1
+        && request.auth.uid in resource.data.playerUids
+        && !(request.auth.uid in request.resource.data.playerUids);
+    }
+
+    function isSendingOwnAction() {
+      return resource.data.status == 'playing'
+        && isParticipant()
+        && changedOnly(['action'])
+        && request.resource.data.action is map
+        && request.resource.data.action.uid == request.auth.uid;
+    }
+
+    function isHostGameUpdate() {
+      return isHost()
+        && changedOnly(['status', 'game', 'action'])
+        && request.resource.data.status in ['playing', 'ended'];
+    }
+
+    function isRecreatingEndedRoom() {
+      return signedIn()
+        && resource.data.status == 'ended'
+        && validRoomData(request.resource.data)
+        && request.resource.data.hostUid == request.auth.uid
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.players.size() == 1
+        && request.resource.data.playerUids == [request.auth.uid]
+        && request.resource.data.game == null
+        && request.resource.data.action == null;
+    }
+
+    match /users/{userId} {
+      allow read, create, update, delete: if isSelf(userId);
+    }
+
+    match /rooms/{roomId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && validRoomData(request.resource.data)
+        && request.resource.data.hostUid == request.auth.uid
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.players.size() == 1
+        && request.resource.data.playerUids == [request.auth.uid]
+        && request.resource.data.game == null
+        && request.resource.data.action == null;
+
+      allow update: if signedIn()
+        && (
+          isJoiningSelf()
+          || isLeavingSelf()
+          || isSendingOwnAction()
+          || isHostGameUpdate()
+          || isRecreatingEndedRoom()
+        );
+
+      allow delete: if isHost() && resource.data.status != 'playing';
+    }
+  }
+}
