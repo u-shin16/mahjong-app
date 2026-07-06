@@ -2577,6 +2577,8 @@ var App = {
         },
         remainTiles: (s.wall || []).length,
         mode: 'beginner',
+        gameMode: s.playerCount === 3 ? 'sanma' : 'yonma',
+        playerCount: s.playerCount,
       };
     };
 
@@ -2593,6 +2595,7 @@ var App = {
       }
       if (!battleAdvice) return '';
 
+      var detail = battleAdvice.detailedReason || {};
       var candidates = (battleAdvice.candidates || []).filter(function(c) {
         return c.tile !== battleAdvice.discard;
       }).map(function(c) {
@@ -2601,7 +2604,11 @@ var App = {
       return '<div class="ai-panel battle-ai-card">' +
         '<div class="ai-panel-title"><span>AI</span> AIアドバイス</div>' +
         '<div class="battle-ai-recommend">おすすめ：<strong>' + esc(battleAdvice.tileName || battleAdvice.discard) + '</strong> を切る</div>' +
-        '<div class="battle-ai-section"><div class="battle-ai-label">理由</div><div class="ai-response">' + esc(battleAdvice.reason || '') + '</div></div>' +
+        '<div class="battle-ai-section"><div class="battle-ai-label">選択の理由</div><div class="ai-response">' + esc(battleAdvice.reason || '') + '</div></div>' +
+        (detail.efficiency ? '<div class="battle-ai-section"><div class="battle-ai-label">1. 和了効率</div><div class="ai-response">' + esc(detail.efficiency) + '</div></div>' : '') +
+        (detail.value ? '<div class="battle-ai-section"><div class="battle-ai-label">2. 期待できる役</div><div class="ai-response">' + esc(detail.value) + '</div></div>' : '') +
+        (detail.risk ? '<div class="battle-ai-section"><div class="battle-ai-label">3. リスク評価</div><div class="ai-response">' + esc(detail.risk) + '</div></div>' : '') +
+        (battleAdvice.nextAdvice ? '<div class="battle-ai-section"><div class="battle-ai-label">戦略アドバイス</div><div class="ai-response">' + esc(battleAdvice.nextAdvice) + '</div></div>' : '') +
         (candidates ? '<div class="battle-ai-section"><div class="battle-ai-label">他の候補</div><ul class="battle-ai-candidates">' + candidates + '</ul></div>' : '') +
         (battleAdvice.warning ? '<div class="battle-ai-warning">' + esc(battleAdvice.warning) + '</div>' : '') +
       '</div>';

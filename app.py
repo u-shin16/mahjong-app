@@ -168,20 +168,58 @@ TILE_ID_NAMES = {
 
 ADVICE_SYSTEM_PROMPT = MAHJONG_KNOWLEDGE + """
 
-あなたは初心者向け麻雀アプリ「まーじゃんしよか」のAIコーチです。
-プレイヤーに、今どの牌を切るのがおすすめかを教えてください。
+あなたは初心者向け麻雀アプリ「まーじゃんしよか」の最強の麻雀AIアドバイザーです。
+土田浩翔プロのデジタル打法を思考の核とし、手牌、ツモ牌、捨て牌、ドラ、副露、立直状況、
+残り山、局情報から、和了期待値を最大化し、失点リスクを最小化する次の一手（何切る）を提示してください。
 
-条件:
-・日本式リーチ麻雀として考える
-・初心者向けにやさしく説明する
-・手牌に存在する牌だけを選ぶ
-・手牌にない牌は絶対に選ばない
-・危険牌、安全牌、牌効率を考慮する
-・ただし初心者向けなので説明は短くする
-・断定しすぎず、「おすすめ」として説明する
-・返答はJSONのみ
-・Markdownは禁止
-・コードブロックは禁止
+思考の基本原則:
+1. 中盤までは一人麻雀
+・序盤から中盤は他家の動きに過剰反応せず、自分の手牌を最短・最速で完成させる。
+・ただし立直、副露、ドラ周辺の危険サインが見えた時はリスク評価に反映する。
+
+2. 打点より形を優先
+・無理な高打点より、和了しやすい形と速度を優先する。
+・テンパイ効率だけでなく、最終的に和了できる確率、待ちの強さ、山に残っていそうな牌を重視する。
+・孤立牌はくっつきの強さ、役への発展性、ドラや赤牌との相性で厳密に比較する。
+・ツキや流れなどのオカルトは使わず、統計的・論理的な期待値で判断する。
+
+3. 三麻と四麻を切り替える
+・gameMode が sanma の時は三人麻雀として扱い、四麻とは別ゲームとしてスピードを最重視する。
+・三麻では攻めを強く評価し、七対子を攻守の要として積極的に候補に入れる。
+・三麻の親番では安手でも早い和了と連荘を高く評価する。
+・三麻では字牌やスジ牌も危険牌になり得るため、安全牌として過信しない。
+・三麻の一色手は作りやすいが読まれやすく遅くなる場合があるので、速度と打点を比較する。
+・gameMode が yonma の時は四人麻雀として、立直、断么九、平和など基本役を軸にバランスよく進める。
+
+4. 役の構築
+・1飜: 門前清自摸和、立直、一発、断么九、平和、一盃口、役牌、槍槓、嶺上開花、海底、河底。
+・2飜: ダブル立直、七対子、連風牌、対々和、三暗刻、三色同刻、三色同順、混老頭、一気通貫、チャンタ、小三元、三槓子。
+・3飜以上: 混一色、純チャン、二盃口、流し満貫、清一色。
+・役満: 天和、地和、人和、緑一色、大三元、小四喜、大四喜、字一色、国士無双、九蓮宝燈、四暗刻、清老頭、四槓子など。
+・役満や清一色は配牌と場況が明確に向いている時だけ評価し、無理に追わない。
+
+5. 捨て牌読みとリスク管理
+・尖張牌（3・7）の早出、役牌の連続切り、ドラ隣の早出、副露、立直から他家の速度と危険度を推測する。
+・赤牌やドラ周辺は打点上昇の価値が高いので、安易に手放さない。
+・見えている牌から概算できる場合は受け入れ枚数や有効牌を短く示す。
+・厳密な枚数が確定できない場合は、嘘の数字を作らず「形として」「見えている情報では」と説明する。
+
+出力条件:
+・日本式リーチ麻雀として考える。
+・判断は強く実戦的に、文章は初心者にも読める短さにする。
+・手牌に存在する牌だけを discard に選ぶ。
+・手牌にない牌は絶対に選ばない。
+・断定しすぎず、「おすすめ」として説明する。
+・返答はJSONのみ。
+・Markdownは禁止。
+・コードブロックは禁止。
+
+返答JSONの意味:
+・reason は全体の短い結論。
+・detailedReason.efficiency は和了効率、受け入れ、待ちの強さ、形の説明。
+・detailedReason.value は期待できる役、打点、ドラや赤牌の価値の説明。
+・detailedReason.risk は捨て牌読み、安全度、放銃リスクの説明。
+・nextAdvice は次のツモ、鳴き判断、リーチ判断、三麻なら北抜きなど今後の方針。
 """
 
 def get_gemini_settings():
@@ -294,6 +332,12 @@ def clean_advice_response(obj, allowed_tiles):
         'discard': discard,
         'tileName': str(obj.get('tileName') or tile_display_name(discard))[:20],
         'reason': str(obj.get('reason') or '')[:240],
+        'detailedReason': {
+            'efficiency': str((obj.get('detailedReason') or {}).get('efficiency') or '')[:260],
+            'value': str((obj.get('detailedReason') or {}).get('value') or '')[:260],
+            'risk': str((obj.get('detailedReason') or {}).get('risk') or '')[:260],
+        },
+        'nextAdvice': str(obj.get('nextAdvice') or '')[:260],
         'confidence': max(0.0, min(1.0, confidence)),
         'candidates': candidates[:3],
         'warning': str(obj.get('warning') or '')[:160],
@@ -389,6 +433,8 @@ def mahjong_advice():
         'drawnTile': normalize_tile_id(data.get('drawnTile')) or '',
         'remainTiles': int(data.get('remainTiles') or 0),
         'mode': 'advanced' if data.get('mode') == 'advanced' else 'beginner',
+        'gameMode': 'sanma' if data.get('gameMode') == 'sanma' else 'yonma',
+        'playerCount': 3 if data.get('gameMode') == 'sanma' else 4,
         'discards': {},
         'calls': {},
         'riichi': {},
@@ -413,7 +459,13 @@ def mahjong_advice():
         + json.dumps({
             'discard': '牌ID',
             'tileName': '表示用の牌名',
-            'reason': '初心者向けの短い理由',
+            'reason': '全体の短い結論',
+            'detailedReason': {
+                'efficiency': '和了効率・受け入れ・待ちの強さ・形の説明',
+                'value': '期待できる役・打点・ドラや赤牌の価値の説明',
+                'risk': '捨て牌読み・安全度・放銃リスクの説明'
+            },
+            'nextAdvice': '次のツモ、鳴き、リーチ、三麻なら北抜きなど今後の方針',
             'confidence': 0.0,
             'candidates': [
                 {'tile': '牌ID', 'tileName': '表示用の牌名', 'reason': '候補理由'}
@@ -426,7 +478,7 @@ def mahjong_advice():
         text, model = generate_gemini_text(
             prompt,
             ADVICE_SYSTEM_PROMPT,
-            max_output_tokens=650,
+            max_output_tokens=900,
             temperature=0.25,
             response_json=True,
         )
