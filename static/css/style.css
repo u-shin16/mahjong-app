@@ -638,6 +638,55 @@ button { font-family: inherit; cursor: pointer; }
   padding: 7px 14px;
   font-size: 0.82rem;
 }
+.btn-google {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  background: #fff;
+  color: #253044;
+  border: 1px solid rgba(255,255,255,0.72);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+}
+.google-mark {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #4285f4;
+  font-weight: 900;
+  background: #fff;
+  border: 1px solid rgba(37,48,68,0.18);
+  line-height: 1;
+}
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 14px;
+  color: #8ab89c;
+  font-size: 0.78rem;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255,255,255,0.12);
+}
+.google-delete-note {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.06);
+  color: #f0ede0;
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
 
 /* ===== Yes/No panel ===== */
 .yn-panel { display: flex; gap: 16px; justify-content: center; }
@@ -5610,8 +5659,66 @@ body.is-battle-page {
   border-color: #7ad8a0;
   color: #fff;
 }
+.battle-main .fr-code-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid rgba(120, 155, 220, 0.28);
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(19, 28, 48, 0.88), rgba(6, 12, 24, 0.88));
+  color: rgba(217, 226, 244, 0.82);
+  font-size: 0.76rem;
+  font-weight: 800;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 4px 10px rgba(0,0,0,0.32);
+}
+.battle-main .jt-game-topbar .fr-rule-chip {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+}
+.fr-table-hand .fr-tile-wrap {
+  display: inline-flex;
+  align-items: flex-end;
+}
+.fr-table-msg {
+  color: #8ab89c;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-align: center;
+}
+.fr-table-actions {
+  justify-content: center;
+}
+.fr-result-float {
+  position: absolute;
+  z-index: 1200;
+  left: 50%;
+  top: 50%;
+  width: min(92vw, 480px);
+  max-height: min(82vh, 620px);
+  transform: translate(-50%, -50%);
+  overflow-y: auto;
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.55);
+}
+.fr-result-float .fr-panel {
+  margin-bottom: 0;
+}
 @media (max-width: 520px) {
   .fr-wrap { max-width: none; }
   .fr-panel { padding: 9px 10px; }
   .fr-actions .btn { padding-left: 12px; padding-right: 12px; }
+  .battle-main .fr-code-chip {
+    max-width: 42vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.68rem;
+  }
+  .fr-table-msg {
+    width: 100%;
+    font-size: 0.76rem;
+  }
 }

@@ -1,7 +1,7 @@
 'use strict';
 
 /* ============================================================
-   Auth: ログイン（メール＋パスワード）と学習進捗のクラウド同期
+   Auth: ログイン（メール＋パスワード / Google）と学習進捗のクラウド同期
    ------------------------------------------------------------
    ・Firebase Authentication … アカウント管理
    ・Cloud Firestore         … users/{uid} に進捗を保存
@@ -29,7 +29,9 @@ var Auth = (function() {
     firebase.auth().onAuthStateChanged(function(u) {
       // メール未確認のユーザーは「ログインしていない」扱いにする
       // （新規登録直後や確認メール再送時に一時的にサインイン状態になるため）
-      _user = (u && u.emailVerified) ? u : null;
+      // GoogleログインはFirebase側で確認済みメールとして扱われるが、念のため
+      // providerも見る。
+      _user = (u && (u.emailVerified || hasProvider(u, 'google.com'))) ? u : null;
       if (_user) {
         // ログインしたらクラウドとローカルの進捗をマージしてから通知
         pullAndMerge().then(_notify)['catch'](function(e) {
@@ -109,6 +111,11 @@ var Auth = (function() {
     'auth/email-already-in-use': 'このメールアドレスはすでに登録されています',
     'auth/weak-password':        'パスワードは6文字以上にしてください',
     'auth/missing-password':     'パスワードを入力してください',
+    'auth/popup-closed-by-user': 'Googleログインがキャンセルされました',
+    'auth/popup-blocked':        'ポップアップがブロックされました。ブラウザの設定を確認してください',
+    'auth/cancelled-popup-request': 'Googleログインがキャンセルされました',
+    'auth/account-exists-with-different-credential': '同じメールアドレスのアカウントが別の方法で登録されています',
+    'auth/operation-not-allowed': 'Firebaseコンソールでこのログイン方法が有効になっていません',
     'auth/too-many-requests':    '試行回数が多すぎます。しばらく待ってから再試行してください',
     'auth/network-request-failed': '通信エラーです。ネットワークを確認してください',
     'app/email-not-verified':    'メールアドレスの確認がまだです。届いた確認メールのリンクをクリックしてからログインしてください',
@@ -116,6 +123,21 @@ var Auth = (function() {
   };
   function jaError(e) {
     return ERR_JA[e && e.code] || ('エラーが発生しました（' + ((e && e.code) || '不明') + '）');
+  }
+
+  function hasProvider(user, providerId) {
+    var providers = (user && user.providerData) || [];
+    return providers.some(function(p) {
+      return p && p.providerId === providerId;
+    });
+  }
+
+  function googleProvider() {
+    var provider = new firebase.auth.GoogleAuthProvider();
+    provider.addScope('email');
+    provider.addScope('profile');
+    provider.setCustomParameters({ prompt: 'select_account' });
+    return provider;
   }
 
   return {
@@ -146,6 +168,10 @@ var Auth = (function() {
         return cred;
       });
     },
+    /* Googleアカウントで登録 / ログイン（初回はFirebase側で自動作成） */
+    loginWithGoogle: function() {
+      return firebase.auth().signInWithPopup(googleProvider());
+    },
     /* 確認メールの再送：一時的にサインインして送信し、すぐサインアウト */
     resendVerification: function(email, pass) {
       return firebase.auth().signInWithEmailAndPassword(email, pass).then(function(cred) {
@@ -170,18 +196,37 @@ var Auth = (function() {
         }, { merge: true });
       });
     },
-    /* アカウント削除：安全のためパスワードで再認証してから、
+    /* アカウント削除：安全のため登録方法に応じて再認証してから、
        ①Firestoreの進捗データ → ②Authアカウント の順に削除する
        （アカウントを先に消すとルール上Firestoreに触れなくなるため） */
     deleteAccount: function(password) {
       var u = firebase.auth().currentUser;
       if (!u) return Promise.reject(new Error('ログインしていません'));
-      var cred = firebase.auth.EmailAuthProvider.credential(u.email, password);
-      return u.reauthenticateWithCredential(cred).then(function() {
+      var reauth;
+      if (hasProvider(u, 'password')) {
+        if (!password) {
+          var e = new Error('missing password');
+          e.code = 'auth/missing-password';
+          return Promise.reject(e);
+        }
+        var cred = firebase.auth.EmailAuthProvider.credential(u.email, password);
+        reauth = u.reauthenticateWithCredential(cred);
+      } else if (hasProvider(u, 'google.com')) {
+        reauth = u.reauthenticateWithPopup(googleProvider());
+      } else {
+        reauth = Promise.resolve();
+      }
+      return reauth.then(function() {
         return _db ? _db.collection('users').doc(u.uid).delete() : Promise.resolve();
       }).then(function() {
         return u.delete();
       });
+    },
+    hasPasswordProvider: function() {
+      return hasProvider(firebase.auth().currentUser, 'password');
+    },
+    hasGoogleProvider: function() {
+      return hasProvider(firebase.auth().currentUser, 'google.com');
     },
     logout:   function() { return firebase.auth().signOut(); },
     resetPassword: function(email) { return firebase.auth().sendPasswordResetEmail(email); },

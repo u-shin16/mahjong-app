@@ -1654,8 +1654,14 @@ var App = {
       this._frRonSent = false;
       this._frResponseSent = false;
     }
+    main.classList.add('battle-main');
+    document.body.classList.add('is-battle-page');
 
     var WINDS = ['東', '南', '西', '北'];
+    var dealerSeat = (g.round - 1) % n;
+    var seatWind = function(seat) {
+      return WINDS[(seat - dealerSeat + n) % n] || WINDS[seat] || '';
+    };
     var isTurnSeat = function(seat) {
       return (g.phase === 'turn' || g.phase === 'naki_discard') && g.turn === seat;
     };
@@ -1691,26 +1697,13 @@ var App = {
       }).join('') + '</div>';
     };
     var plate = function(seat) {
-      return '<span class="fr-wind">' + WINDS[seat] + '</span>' +
+      return '<span class="fr-wind">' + seatWind(seat) + '</span>' +
         '<span class="fr-name">' + esc(names[seat] || ('P' + (seat + 1))) + '</span>' +
         '<span class="fr-score">' + g.scores[seat].toLocaleString() + '点</span>' +
         (nukiCount(seat) > 0 ? '<span class="fr-nuki-badge">北x' + nukiCount(seat) + '</span>' : '') +
         (g.riichi[seat] ? '<span class="fr-riichi-badge">リーチ</span>' : '') +
         (isTurnSeat(seat) ? '<span style="font-size:0.72rem;color:var(--gold)">▶ 手番</span>' : '');
     };
-
-    var oppHtml = '';
-    for (var k = 1; k < n; k++) {
-      var s = (my + k) % n;
-      var backs = '';
-      for (var b = 0; b < (g.hands[s] || []).length; b++) {
-        backs += Tiles.renderTile({ suit: 'man', num: 1, id: 'bk' + s + '_' + b }, { faceDown: true, noHover: true, extraClass: 'xxs' });
-      }
-      oppHtml += '<div class="fr-panel ' + (isTurnSeat(s) ? 'turn' : '') + '">' +
-        '<div class="fr-row">' + plate(s) + '</div>' +
-        '<div class="fr-river fr-hidden-hand">' + backs + '</div>' +
-        meldHtml(s) + nukiHtml(s) + riverHtml(s) + '</div>';
-    }
 
     var msg = '';
     if (g.phase === 'turn') msg = (g.turn === my) ? 'あなたの番！捨てる牌を選んでね' : esc(names[g.turn]) + ' の番です…';
@@ -1721,37 +1714,56 @@ var App = {
 
     var myHand = g.hands[my] || [];
     var myTurn = isTurnSeat(my);
-    var handHtml = '';
-    for (var i = 0; i < myHand.length; i++) {
-      var t = myHand[i];
-      var isDrawn = (g.phase === 'turn') && t.id === g.drawnId;
-      handHtml += (isDrawn ? '<span class="fr-drawn-gap"></span>' : '') +
-        '<span data-idx="' + i + '" class="fr-tile-wrap">' + Tiles.renderTile(t, { noHover: !myTurn }) + '</span>';
-    }
+    var drawnEntry = null;
+    var sortedEntries = [];
+    myHand.forEach(function(t, i) {
+      var entry = { tile: t, idx: i };
+      if (g.phase === 'turn' && t.id === g.drawnId) drawnEntry = entry;
+      else sortedEntries.push(entry);
+    });
+    var friendTileSortKey = function(t) {
+      var suitOrd = { man: 0, pin: 1, sou: 2, wind: 3, dragon: 4, num: 5, colored: 6 };
+      var colorOrd = { red: 0, blue: 1, green: 2 };
+      return [
+        suitOrd[t.suit] || 0,
+        t.suit === 'colored' ? (colorOrd[t.color] || 0) : 0,
+        t.num || 0,
+      ];
+    };
+    sortedEntries.sort(function(a, b) {
+      var ak = friendTileSortKey(a.tile);
+      var bk = friendTileSortKey(b.tile);
+      for (var si = 0; si < ak.length; si++) {
+        if (ak[si] !== bk[si]) return ak[si] - bk[si];
+      }
+      return 0;
+    });
+    var displayEntries = sortedEntries.concat(drawnEntry ? [drawnEntry] : []);
 
     var myMelds = (g.melds && g.melds[my]) || [];
     var isClosed = myMelds.every(function(m) { return m.type === 'ankan'; });
     var ankanCands = (myTurn && g.phase === 'turn') ? FriendGame.checkAnkan(my) : [];
     var canNuki = g.isSanma && myTurn && g.phase === 'turn' && myHand.some(function(t) { return FriendGame.isNukiTile(t); });
-    var btns = '';
-    if (myTurn && g.phase === 'turn' && Agari.isWinningHand(myHand)) btns += '<button class="btn btn-primary" id="btnFrTsumo">ツモ！</button>';
-    if (canNuki) btns += '<button class="btn btn-secondary fr-action-nuki" id="btnFrNuki">北抜き</button>';
+    var actionBtns = '';
+    if (myTurn && g.phase === 'turn' && Agari.isWinningHand(myHand)) actionBtns += '<button class="btn-battle btn-tsumo" id="btnFrTsumo">ツモ！</button>';
+    if (canNuki) actionBtns += '<button class="btn-battle btn-nuki" id="btnFrNuki">北抜き</button>';
     ankanCands.forEach(function(c, ci) {
-      btns += '<button class="btn btn-secondary fr-action-kan" data-ankan-idx="' + ci + '">暗カン ' + esc(Tiles.label(c.tiles[0])) + '</button>';
+      actionBtns += '<button class="btn-battle btn-ankan" data-ankan-idx="' + ci + '">暗カン ' + esc(Tiles.label(c.tiles[0])) + '</button>';
     });
     if (myTurn && g.phase === 'turn' && isClosed && !g.riichi[my] && g.scores[my] >= 1000 && myHand.length % 3 === 2)
-      btns += '<button class="btn btn-secondary" id="btnFrRiichi" style="background:#8c2f28;border-color:#e9a49b;color:#ffe9e4">リーチ</button>';
+      actionBtns += '<button class="btn-battle btn-riichi" id="btnFrRiichi">リーチ</button>';
     if (g.phase === 'ron_wait' && g.ron && g.ron.candidates.indexOf(my) >= 0 && !this._frResponseSent) {
-      btns += '<button class="btn btn-primary" id="btnFrRon">ロン！</button>' +
-              '<button class="btn btn-secondary" id="btnFrPass">スルー</button>';
+      actionBtns += '<button class="btn-battle btn-ron" id="btnFrRon">ロン！</button>' +
+              '<button class="btn-battle btn-skip" id="btnFrPass">スルー</button>';
     }
     if (g.phase === 'call_wait' && g.call && g.call.candidates.indexOf(my) >= 0 && !this._frResponseSent) {
       var callOpts = (g.call.optionsBySeat && g.call.optionsBySeat[my]) || [];
       callOpts.forEach(function(opt, oi) {
         var label = opt.type === 'pon' ? 'ポン' : opt.type === 'chi' ? 'チー' : 'カン';
-        btns += '<button class="btn btn-secondary fr-action-call" data-call-idx="' + oi + '" data-call-type="' + esc(opt.type) + '">' + label + '</button>';
+        var callClass = opt.type === 'pon' ? 'btn-pon' : opt.type === 'chi' ? 'btn-chi' : 'btn-kan';
+        actionBtns += '<button class="btn-battle ' + callClass + '" data-call-idx="' + oi + '" data-call-type="' + esc(opt.type) + '">' + label + '</button>';
       });
-      btns += '<button class="btn btn-secondary" id="btnFrPass">スルー</button>';
+      actionBtns += '<button class="btn-battle btn-skip-call" id="btnFrPass">スルー</button>';
     }
 
     var endHtml = '';
@@ -1760,15 +1772,15 @@ var App = {
       if (g.phase === 'match_end') {
         var rank = names.map(function(nm, i) { return { nm: nm, sc: g.scores[i] }; })
           .sort(function(a, b) { return b.sc - a.sc; });
-        endHtml = '<div class="fr-panel" style="border-color:var(--gold)"><div class="page-title" style="margin-bottom:8px">対局終了</div>' +
+        endHtml = '<div class="fr-result-float"><div class="fr-panel" style="border-color:var(--gold)"><div class="page-title" style="margin-bottom:8px">対局終了</div>' +
           rank.map(function(x, i) { return '<div class="fr-row"><span>' + (i + 1) + '位</span><span class="fr-name">' + esc(x.nm) + '</span><span class="fr-score">' + x.sc.toLocaleString() + '点</span></div>'; }).join('') +
-          '<div class="btn-row" style="margin-top:12px"><button class="btn btn-primary" id="btnFrExit">部屋を出る</button></div></div>';
+          '<div class="btn-row" style="margin-top:12px"><button class="btn btn-primary" id="btnFrExit">部屋を出る</button></div></div></div>';
       } else if (r && r.type === 'ryukyoku') {
-        endHtml = '<div class="fr-panel"><strong>流局</strong>（山がなくなりました）' +
+        endHtml = '<div class="fr-result-float"><div class="fr-panel"><strong>流局</strong>（山がなくなりました）' +
           (FriendGame.isHost() ? '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" id="btnFrNext">' + (g.round >= g.roundLimit ? '最終結果へ' : '次の局へ') + '</button></div>' : '<div style="font-size:0.8rem;color:#8ab89c;margin-top:8px">ホストの操作を待っています…</div>') +
-          '</div>';
+          '</div></div>';
       } else if (r) {
-        endHtml = '<div class="fr-panel" style="border-color:var(--gold)">' +
+        endHtml = '<div class="fr-result-float"><div class="fr-panel" style="border-color:var(--gold)">' +
           '<div style="font-size:1.1rem;font-weight:900;color:var(--gold);margin-bottom:6px">' +
             esc(names[r.winner]) + ' の' + (r.type === 'tsumo' ? 'ツモ' : 'ロン') + '！</div>' +
           '<div class="fr-river" style="margin-bottom:8px">' + (r.hand || []).map(function(t) { return Tiles.renderTile(t, { noHover: true, extraClass: 'xxs' }); }).join('') + '</div>' +
@@ -1780,32 +1792,141 @@ var App = {
           ((r.kanDoraInds || []).length ? '<div class="fr-row" style="margin-bottom:6px"><span style="font-size:0.8rem;color:#8ab89c">カンドラ表示牌</span>' + r.kanDoraInds.map(function(t) { return Tiles.renderTile(t, { noHover: true, extraClass: 'xxs' }); }).join('') + '</div>' : '') +
           r.deltas.map(function(d, i) { return d !== 0 ? '<div class="fr-row"><span>' + esc(names[i]) + '</span><span style="color:' + (d > 0 ? 'var(--gold)' : '#ff9a8a') + '">' + (d > 0 ? '+' : '') + d.toLocaleString() + '</span></div>' : ''; }).join('') +
           (FriendGame.isHost() ? '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" id="btnFrNext">' + (g.round >= g.roundLimit ? '最終結果へ' : '次の局へ') + '</button></div>' : '<div style="font-size:0.8rem;color:#8ab89c;margin-top:8px">ホストの操作を待っています…</div>') +
-          '</div>';
+          '</div></div>';
       }
     }
 
-    var doraHtml = Tiles.renderTile(g.doraInd, { noHover: true, extraClass: 'xxs' }) +
-      (g.kanDoraInds && g.kanDoraInds.length ? '<span style="font-size:0.82rem;color:#8ab89c">カンドラ</span>' + g.kanDoraInds.map(function(t) {
+    var selfSeat = my;
+    var rightSeat = (my + 1) % n;
+    var topSeat = (my + 2) % n;
+    var leftSeat = n === 4 ? (my + 3) % n : -1;
+    var visualSeats = [selfSeat, rightSeat, topSeat].concat(leftSeat >= 0 ? [leftSeat] : []);
+    var isSanma = n === 3;
+
+    var hiddenTiles = function(prefix, count, max) {
+      var total = Math.min(count || 0, max || 13);
+      var html = '';
+      for (var i = 0; i < total; i++) {
+        html += Tiles.renderTile({ suit: 'back', num: 0, id: prefix + i }, { faceDown: true, noHover: true, extraClass: 'xxs' });
+      }
+      return html;
+    };
+    var renderDiscardRiver = function(discards, seat) {
+      var RIVER_COLS = 6;
+      var RIVER_ROWS = 4;
+      var tiles = (discards || []).slice(0, RIVER_COLS * RIVER_ROWS).map(function(tile, i) {
+        var isRiichi = tile && tile.riichiDiscard;
+        var cls = 'river-tile' + (isRiichi ? ' river-riichi' : '');
+        var tileHtml = Tiles.renderTile(tile, { noHover: true, extraClass: cls });
+        var col = i % RIVER_COLS;
+        var rowIdx = Math.floor(i / RIVER_COLS);
+        var gridColumn = seat === 'opposite' ? (RIVER_COLS - col) : (col + 1);
+        var gridRow = seat === 'opposite' ? (RIVER_ROWS - rowIdx) : (rowIdx + 1);
+        return '<div class="rtile-wrap" style="grid-column:' + gridColumn + ';grid-row:' + gridRow + '">' + tileHtml + '</div>';
+      }).join('');
+      return '<div class="disc-river disc-river-' + seat + '">' + tiles + '</div>';
+    };
+    var seatAvatarText = function(seat) {
+      if (seat === my) return '私';
+      var nm = names[seat] || ('P' + (seat + 1));
+      return esc(nm.slice(0, 1));
+    };
+    var seatBadge = function(seat, pos) {
+      if (seat < 0 || seat >= n) return '';
+      return '<div class="jt-seat jt-seat-' + pos + ' seat-' + seat + '">' +
+        '<div class="jt-seat-avatar"><span>' + seatAvatarText(seat) + '</span></div>' +
+        '<div class="jt-seat-caption">' +
+          '<div class="jt-seat-name">' + esc(names[seat] || ('P' + (seat + 1))) + '</div>' +
+          '<div class="jt-seat-points">' + g.scores[seat].toLocaleString() + '</div>' +
+        '</div>' +
+      '</div>';
+    };
+    var centerScoresHtml = '<div class="jt-center-score-list">' +
+      visualSeats.map(function(seat) {
+        return '<div class="jt-center-score-item seat-' + seat + ' ' + (seat === my ? 'me' : '') + '">' +
+          '<span class="wind">' + seatWind(seat) + '</span>' +
+          '<span class="name">' + esc(names[seat] || ('P' + (seat + 1))) + '</span>' +
+          '<span class="pts">' + g.scores[seat].toLocaleString() + '</span>' +
+          (g.riichi[seat] ? '<span class="riichi">R</span>' : '') +
+          (isSanma && nukiCount(seat) > 0 ? '<span class="nuki">北' + nukiCount(seat) + '</span>' : '') +
+        '</div>';
+      }).join('') + '</div>';
+    var centerHtml = '<div class="jt-center"><div class="jt-center-panel">' +
+      '<div class="jt-center-roundline">東' + g.round + '局<span>山' + g.wall.length + '枚</span></div>' +
+      centerScoresHtml +
+    '</div></div>';
+    var doraHtml = '<div class="jt-table-dora">ドラ表示：' +
+      Tiles.renderTile(g.doraInd, { noHover: true, extraClass: 'xxs' }) +
+      ((g.kanDoraInds || []).length ? (g.kanDoraInds || []).map(function(t) {
         return Tiles.renderTile(t, { noHover: true, extraClass: 'xxs' });
-      }).join('') : '');
-    main.innerHTML = '<div class="fr-wrap">' +
-      '<div class="fr-panel"><div class="fr-row">' +
-        '<strong style="color:var(--gold)">東' + g.round + '局</strong>' +
+      }).join('') : '') +
+    '</div>';
+    var handTilesHtml = displayEntries.map(function(entry) {
+      var isDrawn = drawnEntry && entry.idx === drawnEntry.idx;
+      return (isDrawn ? '<span class="fr-drawn-gap"></span>' : '') +
+        '<span data-idx="' + entry.idx + '" class="fr-tile-wrap">' +
+          Tiles.renderTile(entry.tile, { noHover: !myTurn }) +
+        '</span>';
+    }).join('');
+    var actionHtml = '<div class="jt-battle-actions fr-table-actions">' +
+      '<span class="fr-table-msg">' + msg + '</span>' +
+      actionBtns +
+    '</div>';
+    var perPlayerMeldsHtml = '';
+    var seatCls = {};
+    seatCls[my] = 'seat-self';
+    seatCls[topSeat] = 'seat-opposite';
+    seatCls[rightSeat] = 'seat-right';
+    if (leftSeat >= 0) seatCls[leftSeat] = 'seat-left';
+    visualSeats.forEach(function(seat) {
+      var sets = meldSetHtml(g.melds && g.melds[seat]);
+      var nuki = nukiHtml(seat);
+      if (!sets && !nuki) return;
+      perPlayerMeldsHtml += '<div class="player-meld-area ' + seatCls[seat] + '">' + sets + nuki + '</div>';
+    });
+
+    main.innerHTML = '<div class="jt-outer fr-jt-outer">' +
+      '<div class="jt-game-topbar">' +
+        '<span class="fr-code-chip">合言葉：' + esc(room.code) + '</span>' +
         '<span class="fr-rule-chip">' + (g.isSanma ? '3人打ち' : '4人打ち') + '</span>' +
-        '<span style="font-size:0.82rem;color:#8ab89c">残り牌 ' + g.wall.length + '</span>' +
-        '<span style="font-size:0.82rem;color:#8ab89c">ドラ表示</span>' + doraHtml +
-        '<span style="font-size:0.75rem;color:#668c74;margin-left:auto">合言葉：' + esc(room.code) + '</span>' +
-      '</div></div>' +
-      oppHtml +
-      '<div class="fr-msg">' + msg + '</div>' +
-      endHtml +
-      '<div class="fr-panel ' + (myTurn ? 'turn' : '') + '">' +
-        '<div class="fr-row">' + plate(my) + '<span style="font-size:0.72rem;color:#8ab89c">（あなた）</span></div>' +
-        riverHtml(my) + meldHtml(my) + nukiHtml(my) +
-        '<div class="fr-hand" id="frHand">' + handHtml + '</div>' +
-        '<div class="btn-row fr-actions" style="justify-content:flex-start;margin-top:10px">' + btns +
-          '<button class="btn btn-hint" id="btnFrLeave2" style="margin-left:auto;font-size:0.75rem">退出</button></div>' +
-      '</div></div>';
+        '<button class="jt-game-nav" id="btnFrLeave2">退出</button>' +
+      '</div>' +
+      '<div class="jt-row ' + (isSanma ? 'sanma' : '') + '">' +
+        (leftSeat >= 0 ? '<div class="jt-side"></div>' : '<div class="jt-side jt-side-empty"></div>') +
+        '<div class="jt-table ' + (isSanma ? 'sanma' : '') + '">' +
+          '<div class="jt-table-perspective" aria-hidden="true"></div>' +
+          seatBadge(topSeat, 'top') +
+          (leftSeat >= 0 ? seatBadge(leftSeat, 'left') : '') +
+          seatBadge(rightSeat, 'right') +
+          seatBadge(my, 'self') +
+          doraHtml +
+          '<div class="jt-hidden-hand jt-hidden-top">' + hiddenTiles('fr-top-wall-', (g.hands[topSeat] || []).length, 13) + '</div>' +
+          (leftSeat >= 0 ? '<div class="jt-hidden-hand jt-hidden-left">' + hiddenTiles('fr-left-wall-', (g.hands[leftSeat] || []).length, 13) + '</div>' : '') +
+          '<div class="jt-hidden-hand jt-hidden-right">' + hiddenTiles('fr-right-wall-', (g.hands[rightSeat] || []).length, 13) + '</div>' +
+          renderDiscardRiver(g.discards[topSeat], 'opposite') +
+          '<div class="jt-table-mid">' +
+            (leftSeat >= 0 ? renderDiscardRiver(g.discards[leftSeat], 'left') : '') +
+            centerHtml +
+            renderDiscardRiver(g.discards[rightSeat], 'right') +
+          '</div>' +
+          renderDiscardRiver(g.discards[my], 'self') +
+          '<div class="jt-hand-in-table">' +
+            '<div class="jt-hand-infobar">' +
+              '<span><span class="wind">' + seatWind(my) + '</span> あなた</span>' +
+              '<span class="score">' + g.scores[my].toLocaleString() + '点</span>' +
+              (isSanma ? '<span class="mj-nuki-count">抜き北 ' + nukiCount(my) + '</span>' : '') +
+              (g.riichi[my] ? '<span class="mj-riichi-badge">リーチ中</span>' : '') +
+            '</div>' +
+            '<div class="jt-hand-tiles-row fr-table-hand" id="frHand"><div class="mj-sorted-tiles">' + handTilesHtml + '</div></div>' +
+            actionHtml +
+          '</div>' +
+          perPlayerMeldsHtml +
+          endHtml +
+        '</div>' +
+        '<div class="jt-side"></div>' +
+      '</div>' +
+    '</div>';
+    positionDiscardRivers();
 
     var sendFrAction = function(type, payload) {
       FriendGame.sendAction(type, payload)['catch'](function(e) {
@@ -1896,13 +2017,19 @@ var App = {
         '<strong>static/js/firebase-config.js</strong> を開き、Firebaseコンソール' +
         '（プロジェクトの設定 → マイアプリ → ウェブアプリ）の構成値を貼り付けてください。<br>' +
         'あわせてコンソールの <strong>Authentication → ログイン方法</strong> で' +
-        '「メール / パスワード」を有効にしてください。</div>';
+        '「メール / パスワード」と「Google」を有効にしてください。</div>';
       return;
     }
 
     // ログイン済み → アカウント画面
     var u = Auth.user();
     if (u) {
+      var hasPasswordProvider = Auth.hasPasswordProvider && Auth.hasPasswordProvider();
+      var hasGoogleProvider = Auth.hasGoogleProvider && Auth.hasGoogleProvider();
+      var loginProviderText = hasGoogleProvider ? 'Google' : 'メール / パスワード';
+      var deleteAuthHtml = hasPasswordProvider
+        ? '<input class="ai-input" id="delPass" type="password" placeholder="確認のためパスワードを入力" style="width:100%;margin-bottom:10px">'
+        : '<div class="google-delete-note">削除前にGoogleアカウントで本人確認します。</div>';
       main.innerHTML = '<div class="page-title">アカウント</div>' +
         '<div style="max-width:460px;background:rgba(0,0,0,0.18);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:18px">' +
         '<div style="font-size:0.85rem;color:#8ab89c;margin-bottom:4px">名前' +
@@ -1912,6 +2039,7 @@ var App = {
           '<button class="btn btn-secondary" id="btnSaveName" style="white-space:nowrap">保存</button>' +
         '</div>' +
         '<div style="margin-bottom:6px">メール：<strong>' + esc(u.email || '') + '</strong> ✅確認済み</div>' +
+        '<div style="margin-bottom:12px;color:#8ab89c;font-size:0.85rem">登録方法：' + loginProviderText + '</div>' +
         '<div id="accMsg" style="color:#ff9a8a;font-size:0.82rem;min-height:1.2em;margin-bottom:4px"></div>' +
         '<div style="font-size:0.85rem;color:#8ab89c;margin-bottom:16px">学習進捗（クリア状況・星・称号）は自動でクラウドに保存され、他の端末でも引き継げます。</div>' +
         '<button class="btn btn-secondary" id="btnLogout">ログアウト</button>' +
@@ -1923,7 +2051,7 @@ var App = {
               '<strong>この操作は取り消せません。</strong><br>' +
               'クラウドに保存された学習進捗とアカウントが完全に削除されます。<br>' +
               '<span style="color:#8ab89c">※この端末内の進捗（localStorage）は残ります</span></div>' +
-            '<input class="ai-input" id="delPass" type="password" placeholder="確認のためパスワードを入力" style="width:100%;margin-bottom:10px">' +
+            deleteAuthHtml +
             '<button class="btn btn-secondary" id="btnDeleteConfirm" style="background:#8c2f28;border-color:#e9a49b;color:#ffe9e4">完全に削除する</button>' +
             '<div id="delMsg" style="color:#ff9a8a;font-size:0.82rem;min-height:1.2em;margin-top:8px"></div>' +
           '</div>' +
@@ -1935,16 +2063,17 @@ var App = {
         area.style.display = area.style.display === 'none' ? 'block' : 'none';
       });
 
-      // 削除の実行（パスワード再認証つき）
+      // 削除の実行（登録方法に応じた再認証つき）
       var delBusy = false;
       document.getElementById('btnDeleteConfirm').addEventListener('click', function() {
         if (delBusy) return;
-        var pass = document.getElementById('delPass').value;
+        var passEl = document.getElementById('delPass');
+        var pass = passEl ? passEl.value : '';
         var delMsg = document.getElementById('delMsg');
-        if (!pass) { delMsg.textContent = 'パスワードを入力してください'; return; }
+        if (hasPasswordProvider && !pass) { delMsg.textContent = 'パスワードを入力してください'; return; }
         if (!confirm('本当にアカウントを削除しますか？\nクラウドの学習進捗もすべて消えます。')) return;
         delBusy = true;
-        delMsg.textContent = '削除しています…';
+        delMsg.textContent = hasPasswordProvider ? '削除しています…' : 'Googleで本人確認しています…';
         Auth.deleteAccount(pass).then(function() {
           delBusy = false;
           showToast('アカウントを削除しました');
@@ -1979,6 +2108,10 @@ var App = {
     // 未ログイン → ログイン / 新規登録フォーム
     main.innerHTML = '<div class="page-title">ログイン / 新規登録</div>' +
       '<div style="max-width:420px">' +
+      '<button class="btn btn-google" id="btnGoogleLogin" type="button">' +
+        '<span class="google-mark">G</span><span>Googleで続ける</span>' +
+      '</button>' +
+      '<div class="auth-divider"><span>または</span></div>' +
       '<input class="ai-input" id="authEmail" type="email" placeholder="メールアドレス" style="width:100%;margin-bottom:10px">' +
       '<input class="ai-input" id="authPass" type="password" placeholder="パスワード（6文字以上）" style="width:100%;margin-bottom:14px">' +
       '<div class="btn-row" style="justify-content:flex-start">' +
@@ -1997,6 +2130,19 @@ var App = {
     var resendBtn = document.getElementById('btnResend');
     var busy = false;
     var val = function(id) { return document.getElementById(id).value; };
+
+    document.getElementById('btnGoogleLogin').addEventListener('click', function() {
+      if (busy) return;
+      busy = true; errEl.textContent = '';
+      Auth.loginWithGoogle().then(function() {
+        busy = false;
+        showToast('Googleアカウントでログインしました');
+        self._render('login', {});
+      })['catch'](function(e) {
+        busy = false;
+        errEl.textContent = Auth.jaError(e);
+      });
+    });
 
     // 新規登録完了後に表示する「確認メールを送ったよ」画面
     var showVerifySent = function(email) {
