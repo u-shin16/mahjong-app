@@ -438,8 +438,7 @@ function askAI(hand, context, level, targetEl, mode) {
     body: JSON.stringify(payload)
   }).then(function(r) { return r.json(); })
     .then(function(d) {
-      var model = d.model ? '<div style="font-size:0.7rem;color:#668c74;margin-bottom:4px">モデル: ' + esc(d.model) + '</div>' : '';
-      targetEl.innerHTML = model + '<div class="ai-response">' + esc(d.advice || 'アドバイスがありません。') + '</div>';
+      targetEl.innerHTML = '<div class="ai-response ai-one-line">' + esc(d.advice || 'アドバイスがありません。') + '</div>';
     })
     .catch(function() { targetEl.innerHTML = '<div class="ai-response">通信エラーが発生しました。</div>'; });
 }
@@ -695,7 +694,7 @@ var App = {
       { label:'VS CPU',       icon:'🤖', sub:'4人打ちCPU対局', page:'battle_setup', params:{playerCount:4} },
       { label:'単語クイズ',   icon:'📝', sub:'用語・役をランダム出題', page:'quiz_select' },
       { label:'AI先生',        icon:'💡', sub:'質問・手牌相談', page:'ai_coach' },
-      { label:'友人戦',        icon:'👥', sub:'合言葉でオンライン対戦', page:'friend' },
+      { label:'友人戦',        icon:'👥', sub:'6桁IDでオンライン対戦', page:'friend' },
       { label:'三人麻雀',      icon:'🀄', sub:'北抜きありCPU対局', page:'battle_setup', params:{playerCount:3} },
       { label:'役一覧',        icon:'📖', sub:'全役を確認', page:'yaku' },
       { label:'麻雀用語',      icon:'💬', sub:'用語集', page:'terms' },
@@ -1532,6 +1531,10 @@ var App = {
   // ===== Friend Battle（友人戦） =====
   _renderFriend: function(main) {
     var self = this;
+    if (this._frClockTimer) {
+      clearTimeout(this._frClockTimer);
+      this._frClockTimer = null;
+    }
 
     // ルームの更新が来たら友人戦ページを再描画（初回だけ登録）
     if (!this._friendHooked) {
@@ -1552,21 +1555,21 @@ var App = {
 
     var room = FriendGame.room();
 
-    // ── ロビー（部屋を作る / 合言葉で参加）──
+    // ── ロビー（部屋を作る / 6桁IDで参加）──
     if (!room) {
       main.innerHTML = '<div class="page-title">友人戦</div>' +
         '<div class="fr-wrap">' +
-        '<div class="game-instruction">友だちと<strong>同じ合言葉</strong>を入力すると同じ部屋に入れます。<br>' +
-        '<span style="font-size:0.82rem;color:#8ab89c">ルール：東風戦・ツモ/ロン/リーチ/ドラ・ポン/チー/カン対応。三麻は北抜きあり。</span></div>' +
-        '<input class="ai-input" id="frCode" type="text" placeholder="合言葉（例：うみねこ123）" style="width:100%;margin:12px 0 10px">' +
+        '<div class="game-instruction">友だちに<strong>6桁のルームID</strong>を伝えて同じ部屋に入れます。<br>' +
+        '<span style="font-size:0.82rem;color:#8ab89c">ホストが三麻/四麻、東風/半荘、持ち時間、CPU席を設定できます。</span></div>' +
+        '<input class="ai-input fr-room-input" id="frCode" type="text" inputmode="numeric" maxlength="6" placeholder="参加するID（作成時は空でもOK）" style="width:100%;margin:12px 0 10px">' +
         '<div class="fr-row" id="frCount" style="margin-bottom:14px">' +
           '<span style="color:#8ab89c;font-size:0.85rem">人数：</span>' +
           '<button class="ai-level-btn" data-n="3">3人打ち</button>' +
           '<button class="ai-level-btn active" data-n="4">4人打ち</button>' +
         '</div>' +
         '<div class="btn-row" style="justify-content:flex-start">' +
-          '<button class="btn btn-primary" id="btnFrCreate">部屋を作る</button>' +
-          '<button class="btn btn-secondary" id="btnFrJoin">合言葉で参加</button>' +
+          '<button class="btn btn-primary" id="btnFrCreate">ルームを作成</button>' +
+          '<button class="btn btn-secondary" id="btnFrJoin">IDで参加</button>' +
         '</div>' +
         '<div id="frErr" style="color:#ff9a8a;font-size:0.85rem;margin-top:10px;min-height:1.3em"></div>' +
         '</div>';
@@ -1583,20 +1586,21 @@ var App = {
       if (FriendGame.error && FriendGame.error()) {
         errEl.textContent = FriendGame.errorMessage(FriendGame.error());
       }
-      var getCode = function() {
-        var c = document.getElementById('frCode').value.trim();
-        if (!c) { errEl.textContent = '合言葉を入力してください'; return null; }
-        if (c.length > 40) { errEl.textContent = '合言葉は40文字以内にしてください'; return null; }
-        if (c.indexOf('/') >= 0) { errEl.textContent = '合言葉に「/」は使えません'; return null; }
+      document.getElementById('frCode').addEventListener('input', function(e) {
+        e.target.value = FriendGame.normalizeCode(e.target.value);
+      });
+      var getCode = function(requireCode) {
+        var c = FriendGame.normalizeCode(document.getElementById('frCode').value);
+        if (requireCode && !/^\d{6}$/.test(c)) { errEl.textContent = '6桁のルームIDを入力してください'; return null; }
         return c;
       };
       document.getElementById('btnFrCreate').addEventListener('click', function() {
-        var c = getCode(); if (!c) return;
+        var c = getCode(false);
         errEl.textContent = '';
         FriendGame.createRoom(c, count)['catch'](function(e) { errEl.textContent = FriendGame.errorMessage(e) || '部屋を作れませんでした'; });
       });
       document.getElementById('btnFrJoin').addEventListener('click', function() {
-        var c = getCode(); if (!c) return;
+        var c = getCode(true); if (!c) return;
         errEl.textContent = '';
         FriendGame.joinRoom(c)['catch'](function(e) { errEl.textContent = FriendGame.errorMessage(e) || '参加できませんでした'; });
       });
@@ -1606,25 +1610,94 @@ var App = {
     // ── 待機室 ──
     if (room.status === 'waiting') {
       var need = room.playerCount - room.players.length;
+      var rules = FriendGame.rules();
+      var readyMap = room.readyMap || {};
+      var meUid = Auth.user().uid;
+      var myReady = readyMap[meUid] === true;
+      var canStart = FriendGame.allReady();
+      var hostControls = '';
+      if (FriendGame.isHost()) {
+        hostControls = '<div class="fr-panel fr-rule-panel">' +
+          '<div class="fr-panel-title">ルール設定</div>' +
+          '<div class="fr-rule-grid">' +
+            '<label>人数<div class="fr-segment" id="frRuleCount">' +
+              '<button class="ai-level-btn ' + (rules.playerCount === 3 ? 'active' : '') + '" data-rule-player-count="3">三麻</button>' +
+              '<button class="ai-level-btn ' + (rules.playerCount === 4 ? 'active' : '') + '" data-rule-player-count="4">四麻</button>' +
+            '</div></label>' +
+            '<label>試合<div class="fr-segment" id="frRuleGame">' +
+              '<button class="ai-level-btn ' + (rules.gameType === 'tonpu' ? 'active' : '') + '" data-rule-game-type="tonpu">東風</button>' +
+              '<button class="ai-level-btn ' + (rules.gameType === 'hanchan' ? 'active' : '') + '" data-rule-game-type="hanchan">半荘</button>' +
+            '</div></label>' +
+            '<label>持ち点<input class="ai-input fr-small-input" id="frStartScore" type="number" min="10000" max="60000" step="1000" value="' + rules.startScore + '"></label>' +
+            '<label>基本秒<input class="ai-input fr-small-input" id="frBaseSec" type="number" min="3" max="15" value="' + rules.baseSeconds + '"></label>' +
+            '<label>持ち時間<input class="ai-input fr-small-input" id="frReserveSec" type="number" min="0" max="120" step="5" value="' + rules.reserveSeconds + '"></label>' +
+            '<label class="fr-check-label"><input id="frSudden" type="checkbox" ' + (rules.suddenDeath ? 'checked' : '') + '> サドンデス</label>' +
+          '</div>' +
+          '<div class="fr-rule-note">変更するとReadyは解除されます。</div>' +
+        '</div>';
+      }
       main.innerHTML = '<div class="page-title">待機室</div>' +
         '<div class="fr-wrap">' +
-        '<div class="game-instruction">合言葉：<strong style="color:var(--gold)">' + esc(room.code) + '</strong>（' + room.playerCount + '人打ち）<br>' +
-        '友だちに合言葉を伝えて「合言葉で参加」してもらおう！</div>' +
-        '<div class="fr-panel"><div style="font-size:0.85rem;color:#8ab89c;margin-bottom:6px">メンバー（' + room.players.length + '/' + room.playerCount + '）</div>' +
+        '<div class="game-instruction">ルームID：<strong class="fr-room-code">' + esc(room.code) + '</strong><br>' +
+        '友だちにこのIDを伝えて「IDで参加」してもらおう！</div>' +
+        hostControls +
+        '<div class="fr-panel"><div class="fr-panel-title">メンバー（' + room.players.length + '/' + room.playerCount + '）</div>' +
         room.players.map(function(p, i) {
-          return '<div class="fr-row" style="margin-bottom:4px"><span class="fr-name">' + esc(p.name) + '</span>' +
-            (i === 0 ? '<span style="font-size:0.72rem;color:var(--gold)">👑 ホスト</span>' : '') + '</div>';
+          var isCpu = !!p.isCpu || String(p.uid || '').indexOf('cpu:') === 0;
+          var ready = isCpu || readyMap[p.uid] === true;
+          return '<div class="fr-row fr-lobby-player"><span class="fr-name">' + esc(p.name) + '</span>' +
+            (i === 0 ? '<span class="fr-host-badge">ホスト</span>' : '') +
+            (isCpu ? '<span class="fr-cpu-badge">CPU</span>' : '<span class="fr-ready-badge ' + (ready ? 'ready' : '') + '">' + (ready ? 'Ready' : '未Ready') + '</span>') +
+            (FriendGame.isHost() && isCpu ? '<button class="fr-mini-btn" data-remove-cpu="' + esc(p.uid) + '">外す</button>' : '') +
+            '</div>';
         }).join('') +
-        (need > 0 ? '<div style="color:#8ab89c;font-size:0.85rem;margin-top:6px">あと' + need + '人待っています…</div>' : '') +
+        (need > 0 ? '<div style="color:#8ab89c;font-size:0.85rem;margin-top:6px">あと' + need + '席あります</div>' : '') +
+        (FriendGame.isHost() && need > 0 ? '<div class="btn-row" style="justify-content:flex-start;margin-top:8px"><button class="btn btn-secondary" id="btnFrAddCpu">CPUを追加</button></div>' : '') +
         '</div>' +
         '<div class="btn-row" style="justify-content:flex-start">' +
-        (FriendGame.isHost() ? '<button class="btn btn-primary" id="btnFrStart" ' + (need > 0 ? 'disabled style="opacity:0.5"' : '') + '>対局開始</button>' : '') +
+        '<button class="btn ' + (myReady ? 'btn-secondary' : 'btn-primary') + '" id="btnFrReady">' + (myReady ? 'Ready解除' : 'Ready') + '</button>' +
+        (FriendGame.isHost() ? '<button class="btn btn-primary" id="btnFrStart" ' + (!canStart ? 'disabled style="opacity:0.5"' : '') + '>対局開始</button>' : '') +
         '<button class="btn btn-secondary" id="btnFrLeave">退出</button></div>' +
         '<div id="frErr" style="color:#ff9a8a;font-size:0.85rem;margin-top:10px"></div></div>';
 
+      var setErr = function(e) { document.getElementById('frErr').textContent = FriendGame.errorMessage(e) || String((e && e.message) || e || ''); };
+      var updateRule = function(patch) {
+        FriendGame.updateRules(patch)['catch'](setErr);
+      };
+      document.querySelectorAll('[data-rule-player-count]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var pc = parseInt(btn.dataset.rulePlayerCount, 10);
+          updateRule({ playerCount: pc, startScore: pc === 3 ? 35000 : 25000 });
+        });
+      });
+      document.querySelectorAll('[data-rule-game-type]').forEach(function(btn) {
+        btn.addEventListener('click', function() { updateRule({ gameType: btn.dataset.ruleGameType }); });
+      });
+      var bindRuleInput = function(id, key, parse) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', function() {
+          var patch = {};
+          patch[key] = parse ? parse(el.value) : el.value;
+          updateRule(patch);
+        });
+      };
+      bindRuleInput('frStartScore', 'startScore', function(v) { return parseInt(v, 10); });
+      bindRuleInput('frBaseSec', 'baseSeconds', function(v) { return parseInt(v, 10); });
+      bindRuleInput('frReserveSec', 'reserveSeconds', function(v) { return parseInt(v, 10); });
+      var sudden = document.getElementById('frSudden');
+      if (sudden) sudden.addEventListener('change', function() { updateRule({ suddenDeath: sudden.checked }); });
+      var addCpu = document.getElementById('btnFrAddCpu');
+      if (addCpu) addCpu.addEventListener('click', function() { FriendGame.addCpu()['catch'](setErr); });
+      document.querySelectorAll('[data-remove-cpu]').forEach(function(btn) {
+        btn.addEventListener('click', function() { FriendGame.removeCpu(btn.dataset.removeCpu)['catch'](setErr); });
+      });
+      document.getElementById('btnFrReady').addEventListener('click', function() {
+        FriendGame.setReady(!myReady)['catch'](setErr);
+      });
       var startBtn = document.getElementById('btnFrStart');
       if (startBtn) startBtn.addEventListener('click', function() {
-        FriendGame.startGame()['catch'](function(e) { document.getElementById('frErr').textContent = FriendGame.errorMessage(e) || ''; });
+        FriendGame.startGame()['catch'](setErr);
       });
       document.getElementById('btnFrLeave').addEventListener('click', function() {
         FriendGame.leaveRoom().then(function() { self._render('friend', {}); });
@@ -1640,7 +1713,7 @@ var App = {
     var names = room.players.map(function(p) { return p.name; });
     if (my < 0 || my >= n) {
       main.innerHTML = '<div class="fr-wrap"><div class="fr-panel"><div class="page-title">友人戦</div>' +
-        '<div class="game-instruction">この部屋の参加メンバーではありません。合言葉から入り直してください。</div>' +
+        '<div class="game-instruction">この部屋の参加メンバーではありません。ルームIDから入り直してください。</div>' +
         '<div class="btn-row"><button class="btn btn-primary" id="btnFrLeave2">ロビーへ</button></div></div></div>';
       document.getElementById('btnFrLeave2').addEventListener('click', function() {
         FriendGame.leaveRoom().then(function() { self._render('friend', {}); });
@@ -1653,7 +1726,9 @@ var App = {
       this._frRiichiSel = false;
       this._frRonSent = false;
       this._frResponseSent = false;
+      this._frSelectedIdx = -1;
     }
+    if (this._frSortTiles == null) this._frSortTiles = localStorage.getItem('mj_friend_sort_tiles') !== '0';
     main.classList.add('battle-main');
     document.body.classList.add('is-battle-page');
 
@@ -1668,6 +1743,22 @@ var App = {
     var nukiCount = function(seat) {
       return g.nuki && g.nuki[seat] ? g.nuki[seat].length : 0;
     };
+    var isDisconnected = function(seat) {
+      return !!(g.disconnected && g.disconnected[seat]);
+    };
+    var showDiff = !!(this._frShowDiffUntil && Date.now() < this._frShowDiffUntil);
+    var scoreText = function(seat) {
+      if (!showDiff) return g.scores[seat].toLocaleString();
+      var diff = g.scores[seat] - g.scores[my];
+      if (seat === my) return '基準';
+      return (diff > 0 ? '+' : '') + diff.toLocaleString();
+    };
+    var timer = g.turnTimer || null;
+    var timerLeft = timer ? Math.max(0, timer.deadlineAt - Date.now()) : 0;
+    var timerTotal = timer ? Math.max(1, timer.baseMs + timer.reserveMs) : 1;
+    var timerPct = Math.max(0, Math.min(100, Math.round(timerLeft / timerTotal * 100)));
+    var timerHtml = timer ? '<div class="fr-turn-timer ' + (timerLeft <= 5000 ? 'warn' : '') + '">' +
+      '<span>' + (Math.ceil(timerLeft / 1000)) + 's</span><i style="width:' + timerPct + '%"></i></div>' : '';
     var meldSetHtml = function(melds) {
       return (melds || []).map(function(m, mi) {
         var typeLabel = m.type === 'pon' ? 'ポン' : m.type === 'chi' ? 'チー' : m.type === 'kan' ? 'カン' : '暗カン';
@@ -1699,7 +1790,8 @@ var App = {
     var plate = function(seat) {
       return '<span class="fr-wind">' + seatWind(seat) + '</span>' +
         '<span class="fr-name">' + esc(names[seat] || ('P' + (seat + 1))) + '</span>' +
-        '<span class="fr-score">' + g.scores[seat].toLocaleString() + '点</span>' +
+        '<span class="fr-score">' + scoreText(seat) + (showDiff && seat !== my ? '' : '点') + '</span>' +
+        (isDisconnected(seat) ? '<span class="fr-disconnect-mark">⚡</span>' : '') +
         (nukiCount(seat) > 0 ? '<span class="fr-nuki-badge">北x' + nukiCount(seat) + '</span>' : '') +
         (g.riichi[seat] ? '<span class="fr-riichi-badge">リーチ</span>' : '') +
         (isTurnSeat(seat) ? '<span style="font-size:0.72rem;color:var(--gold)">▶ 手番</span>' : '');
@@ -1730,14 +1822,16 @@ var App = {
         t.num || 0,
       ];
     };
-    sortedEntries.sort(function(a, b) {
-      var ak = friendTileSortKey(a.tile);
-      var bk = friendTileSortKey(b.tile);
-      for (var si = 0; si < ak.length; si++) {
-        if (ak[si] !== bk[si]) return ak[si] - bk[si];
-      }
-      return 0;
-    });
+    if (this._frSortTiles) {
+      sortedEntries.sort(function(a, b) {
+        var ak = friendTileSortKey(a.tile);
+        var bk = friendTileSortKey(b.tile);
+        for (var si = 0; si < ak.length; si++) {
+          if (ak[si] !== bk[si]) return ak[si] - bk[si];
+        }
+        return 0;
+      });
+    }
     var displayEntries = sortedEntries.concat(drawnEntry ? [drawnEntry] : []);
 
     var myMelds = (g.melds && g.melds[my]) || [];
@@ -1765,6 +1859,13 @@ var App = {
       });
       actionBtns += '<button class="btn-battle btn-skip-call" id="btnFrPass">スルー</button>';
     }
+    var myFlags = FriendGame.autoFlags(my);
+    var autoControls = '<div class="fr-auto-controls">' +
+      '<button class="fr-toggle ' + (myFlags.agari ? 'active' : '') + '" data-fr-auto="agari">和了</button>' +
+      '<button class="fr-toggle ' + (myFlags.tsumogiri ? 'active' : '') + '" data-fr-auto="tsumogiri">ツモ切り</button>' +
+      '<button class="fr-toggle ' + (myFlags.noCalls ? 'active' : '') + '" data-fr-auto="noCalls">鳴きなし</button>' +
+      '<button class="fr-toggle ' + (this._frSortTiles ? 'active' : '') + '" id="btnFrSortTiles">理牌</button>' +
+    '</div>';
 
     var endHtml = '';
     if (g.phase === 'hand_end' || g.phase === 'match_end') {
@@ -1780,10 +1881,11 @@ var App = {
           (FriendGame.isHost() ? '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" id="btnFrNext">' + (g.round >= g.roundLimit ? '最終結果へ' : '次の局へ') + '</button></div>' : '<div style="font-size:0.8rem;color:#8ab89c;margin-top:8px">ホストの操作を待っています…</div>') +
           '</div></div>';
       } else if (r) {
+        var resultHand = Tiles.sortTiles((r.hand || []).slice());
         endHtml = '<div class="fr-result-float"><div class="fr-panel" style="border-color:var(--gold)">' +
           '<div style="font-size:1.1rem;font-weight:900;color:var(--gold);margin-bottom:6px">' +
             esc(names[r.winner]) + ' の' + (r.type === 'tsumo' ? 'ツモ' : 'ロン') + '！</div>' +
-          '<div class="fr-river" style="margin-bottom:8px">' + (r.hand || []).map(function(t) { return Tiles.renderTile(t, { noHover: true, extraClass: 'xxs' }); }).join('') + '</div>' +
+          '<div class="fr-river" style="margin-bottom:8px">' + resultHand.map(function(t) { return Tiles.renderTile(t, { noHover: true, extraClass: 'xxs' }); }).join('') + '</div>' +
           (r.melds && r.melds.length ? '<div class="fr-melds">' + meldSetHtml(r.melds) + '</div>' : '') +
           (r.nuki && r.nuki.length ? '<div class="fr-nuki-row"><span>抜き北</span>' + r.nuki.map(function(t) { return Tiles.renderTile(t, { noHover: true, extraClass: 'xxs' }); }).join('') + '</div>' : '') +
           r.yaku.map(function(y) { return '<div class="fr-row"><span>' + esc(y.name) + '</span><span class="fr-score">' + y.han + '翻</span></div>'; }).join('') +
@@ -1846,13 +1948,15 @@ var App = {
         return '<div class="jt-center-score-item seat-' + seat + ' ' + (seat === my ? 'me' : '') + '">' +
           '<span class="wind">' + seatWind(seat) + '</span>' +
           '<span class="name">' + esc(names[seat] || ('P' + (seat + 1))) + '</span>' +
-          '<span class="pts">' + g.scores[seat].toLocaleString() + '</span>' +
+          '<span class="pts ' + (showDiff && seat !== my ? (g.scores[seat] >= g.scores[my] ? 'plus' : 'minus') : '') + '">' + scoreText(seat) + '</span>' +
+          (isDisconnected(seat) ? '<span class="fr-disconnect-mark">⚡</span>' : '') +
           (g.riichi[seat] ? '<span class="riichi">R</span>' : '') +
           (isSanma && nukiCount(seat) > 0 ? '<span class="nuki">北' + nukiCount(seat) + '</span>' : '') +
         '</div>';
       }).join('') + '</div>';
-    var centerHtml = '<div class="jt-center"><div class="jt-center-panel">' +
+    var centerHtml = '<div class="jt-center"><div class="jt-center-panel fr-score-toggle" id="frScoreToggle" title="点差表示">' +
       '<div class="jt-center-roundline">東' + g.round + '局<span>山' + g.wall.length + '枚</span></div>' +
+      timerHtml +
       centerScoresHtml +
     '</div></div>';
     var doraHtml = '<div class="jt-table-dora">ドラ表示：' +
@@ -1863,9 +1967,10 @@ var App = {
     '</div>';
     var handTilesHtml = displayEntries.map(function(entry) {
       var isDrawn = drawnEntry && entry.idx === drawnEntry.idx;
+      var isSelected = self._frSelectedIdx === entry.idx;
       return (isDrawn ? '<span class="fr-drawn-gap"></span>' : '') +
         '<span data-idx="' + entry.idx + '" class="fr-tile-wrap">' +
-          Tiles.renderTile(entry.tile, { noHover: !myTurn }) +
+          Tiles.renderTile(entry.tile, { noHover: !myTurn, selected: isSelected }) +
         '</span>';
     }).join('');
     var actionHtml = '<div class="jt-battle-actions fr-table-actions">' +
@@ -1887,7 +1992,7 @@ var App = {
 
     main.innerHTML = '<div class="jt-outer fr-jt-outer">' +
       '<div class="jt-game-topbar">' +
-        '<span class="fr-code-chip">合言葉：' + esc(room.code) + '</span>' +
+        '<span class="fr-code-chip">ID：' + esc(room.code) + '</span>' +
         '<span class="fr-rule-chip">' + (g.isSanma ? '3人打ち' : '4人打ち') + '</span>' +
         '<button class="jt-game-nav" id="btnFrLeave2">退出</button>' +
       '</div>' +
@@ -1916,8 +2021,10 @@ var App = {
               '<span class="score">' + g.scores[my].toLocaleString() + '点</span>' +
               (isSanma ? '<span class="mj-nuki-count">抜き北 ' + nukiCount(my) + '</span>' : '') +
               (g.riichi[my] ? '<span class="mj-riichi-badge">リーチ中</span>' : '') +
+              (isDisconnected(my) ? '<span class="fr-disconnect-mark">⚡ 切断扱い</span>' : '') +
             '</div>' +
             '<div class="jt-hand-tiles-row fr-table-hand" id="frHand"><div class="mj-sorted-tiles">' + handTilesHtml + '</div></div>' +
+            autoControls +
             actionHtml +
           '</div>' +
           perPlayerMeldsHtml +
@@ -1935,19 +2042,68 @@ var App = {
     };
 
     // ── イベント ──
+    var scoreToggle = document.getElementById('frScoreToggle');
+    if (scoreToggle) scoreToggle.addEventListener('click', function() {
+      self._frShowDiffUntil = Date.now() + 5000;
+      self._render('friend', {});
+    });
+    document.querySelectorAll('[data-fr-auto]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var next = {
+          agari: !!myFlags.agari,
+          tsumogiri: !!myFlags.tsumogiri,
+          noCalls: !!myFlags.noCalls,
+        };
+        next[btn.dataset.frAuto] = !next[btn.dataset.frAuto];
+        sendFrAction('auto_flags', { flags: next });
+      });
+    });
+    var sortBtn = document.getElementById('btnFrSortTiles');
+    if (sortBtn) sortBtn.addEventListener('click', function() {
+      self._frSortTiles = !self._frSortTiles;
+      localStorage.setItem('mj_friend_sort_tiles', self._frSortTiles ? '1' : '0');
+      self._render('friend', {});
+    });
+    var discardIdx = function(idx) {
+      var tile = myHand[idx];
+      if (!tile) return;
+      if (g.riichi[my] && tile.id !== g.drawnId) { showToast('リーチ中はツモった牌しか捨てられないよ'); return; }
+      self._frSelectedIdx = -1;
+      if (self._frRiichiSel) {
+        var rest = myHand.filter(function(_, i) { return i !== idx; });
+        if (!FriendGame.isTenpai13(rest)) { showToast('その牌を捨てるとテンパイが崩れちゃう！'); return; }
+        sendFrAction('riichi', { idx: idx });
+      } else {
+        sendFrAction('discard', { idx: idx });
+      }
+    };
     if (myTurn) {
       document.querySelectorAll('#frHand .fr-tile-wrap').forEach(function(el) {
-        el.addEventListener('click', function() {
+        var drag = null;
+        el.addEventListener('pointerdown', function(e) {
+          drag = { x: e.clientX, y: e.clientY };
+          try { el.setPointerCapture(e.pointerId); } catch (ex) {}
+        });
+        el.addEventListener('pointermove', function(e) {
+          if (!drag) return;
+          var dy = Math.min(0, e.clientY - drag.y);
+          if (dy < -8) el.style.transform = 'translateY(' + Math.max(dy, -48) + 'px)';
+        });
+        el.addEventListener('pointerup', function(e) {
           var idx = parseInt(el.dataset.idx, 10);
-          var tile = myHand[idx];
-          if (g.riichi[my] && tile.id !== g.drawnId) { showToast('リーチ中はツモった牌しか捨てられないよ'); return; }
-          if (self._frRiichiSel) {
-            var rest = myHand.filter(function(_, i) { return i !== idx; });
-            if (!FriendGame.isTenpai13(rest)) { showToast('その牌を捨てるとテンパイが崩れちゃう！'); return; }
-            sendFrAction('riichi', { idx: idx });
+          var slideDiscard = drag && (drag.y - e.clientY) > 46;
+          el.style.transform = '';
+          drag = null;
+          if (slideDiscard || self._frSelectedIdx === idx) {
+            discardIdx(idx);
           } else {
-            sendFrAction('discard', { idx: idx });
+            self._frSelectedIdx = idx;
+            self._render('friend', {});
           }
+        });
+        el.addEventListener('pointercancel', function() {
+          el.style.transform = '';
+          drag = null;
         });
       });
     }
@@ -2000,10 +2156,15 @@ var App = {
     var exitBtn = document.getElementById('btnFrExit');
     if (exitBtn) exitBtn.addEventListener('click', function() { FriendGame.leaveRoom().then(function() { self._render('friend', {}); }); });
     document.getElementById('btnFrLeave2').addEventListener('click', function() {
-      if (confirm('対局から退出しますか？（合言葉でまた戻れます）')) {
+      if (confirm('対局から退出しますか？（ルームIDでまた戻れます）')) {
         FriendGame.leaveRoom().then(function() { self._render('friend', {}); });
       }
     });
+    if (g.turnTimer || (self._frShowDiffUntil && Date.now() < self._frShowDiffUntil)) {
+      this._frClockTimer = setTimeout(function() {
+        if (self.current === 'friend') self._render('friend', {});
+      }, 1000);
+    }
   },
 
   // ===== Login / Account =====
@@ -2740,23 +2901,9 @@ var App = {
           '<div class="ai-response ai-error">' + esc(battleAdviceError) + '</div></div>';
       }
       if (!battleAdvice) return '';
-
-      var detail = battleAdvice.detailedReason || {};
-      var candidates = (battleAdvice.candidates || []).filter(function(c) {
-        return c.tile !== battleAdvice.discard;
-      }).map(function(c) {
-        return '<li><strong>' + esc(c.tileName || c.tile) + '</strong>：' + esc(c.reason || '') + '</li>';
-      }).join('');
+      var oneLine = (battleAdvice.tileName || battleAdvice.discard) + '切り。' + (battleAdvice.reason || '形がいちばん残るから');
       return '<div class="ai-panel battle-ai-card">' +
-        '<div class="ai-panel-title"><span>AI</span> AIアドバイス</div>' +
-        '<div class="battle-ai-recommend">おすすめ：<strong>' + esc(battleAdvice.tileName || battleAdvice.discard) + '</strong> を切る</div>' +
-        '<div class="battle-ai-section"><div class="battle-ai-label">選択の理由</div><div class="ai-response">' + esc(battleAdvice.reason || '') + '</div></div>' +
-        (detail.efficiency ? '<div class="battle-ai-section"><div class="battle-ai-label">1. 和了効率</div><div class="ai-response">' + esc(detail.efficiency) + '</div></div>' : '') +
-        (detail.value ? '<div class="battle-ai-section"><div class="battle-ai-label">2. 期待できる役</div><div class="ai-response">' + esc(detail.value) + '</div></div>' : '') +
-        (detail.risk ? '<div class="battle-ai-section"><div class="battle-ai-label">3. リスク評価</div><div class="ai-response">' + esc(detail.risk) + '</div></div>' : '') +
-        (battleAdvice.nextAdvice ? '<div class="battle-ai-section"><div class="battle-ai-label">戦略アドバイス</div><div class="ai-response">' + esc(battleAdvice.nextAdvice) + '</div></div>' : '') +
-        (candidates ? '<div class="battle-ai-section"><div class="battle-ai-label">他の候補</div><ul class="battle-ai-candidates">' + candidates + '</ul></div>' : '') +
-        (battleAdvice.warning ? '<div class="battle-ai-warning">' + esc(battleAdvice.warning) + '</div>' : '') +
+        '<div class="battle-ai-recommend ai-one-line">' + esc(oneLine) + '</div>' +
       '</div>';
     };
 
@@ -3467,9 +3614,25 @@ var App = {
       var hand = (s.hands[winner] || []).slice();
       var handHtml = '';
       if (hand.length > 0) {
-        // 最後の牌が和了牌
-        var mainTiles   = hand.slice(0, hand.length - 1);
-        var winningTile = hand[hand.length - 1];
+        var winningTile = s.winTile || hand[hand.length - 1];
+        var winRemoved = false;
+        var mainTiles = hand.filter(function(t) {
+          if (!winRemoved && winningTile && t.id === winningTile.id) {
+            winRemoved = true;
+            return false;
+          }
+          return true;
+        });
+        if (!winRemoved && winningTile) {
+          mainTiles = hand.filter(function(t) {
+            if (!winRemoved && Tiles.isSame(t, winningTile)) {
+              winRemoved = true;
+              return false;
+            }
+            return true;
+          });
+        }
+        mainTiles = Tiles.sortTiles(mainTiles);
         handHtml =
           '<div class="agr-hand">' +
             '<div class="agr-tiles">' +

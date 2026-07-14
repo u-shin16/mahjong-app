@@ -215,11 +215,8 @@ ADVICE_SYSTEM_PROMPT = MAHJONG_KNOWLEDGE + """
 ・コードブロックは禁止。
 
 返答JSONの意味:
-・reason は全体の短い結論。
-・detailedReason.efficiency は和了効率、受け入れ、待ちの強さ、形の説明。
-・detailedReason.value は期待できる役、打点、ドラや赤牌の価値の説明。
-・detailedReason.risk は捨て牌読み、安全度、放銃リスクの説明。
-・nextAdvice は次のツモ、鳴き判断、リーチ判断、三麻なら北抜きなど今後の方針。
+・reason は「受けが広いから」「安全牌だから」のように20文字前後の理由だけ。
+・長い解説、他候補、次の方針は書かない。
 """
 
 def get_gemini_settings():
@@ -373,7 +370,7 @@ def ai_advice():
                 '・有効牌の枚数（受け入れ）・打点期待値・安全度・巡目効率などの具体的な数値や比較を含めること。\n'
                 '・「〇〇を切ると受け入れがXX枚、△△を切るとYY枚だが打点差Z点ある」など定量的に示すこと。\n'
                 '・一般的なプロの考え方（最速テンパイ重視派・高打点重視派など）も触れてよい。\n'
-                '・300文字以内で具体的かつ実戦的に答える。'
+                '・回答は一文だけで答える。'
             )
         else:
             level_style = (
@@ -382,25 +379,31 @@ def ai_advice():
                 '・例：「テンパイ（あと1枚でアガれる状態）」「刻子（同じ牌3枚セット）」のように。\n'
                 '・難しい言葉の代わりに「〇〇みたいな感じ」「〜と考えると覚えやすい」など比喩を積極的に使うこと。\n'
                 '・「大丈夫！」「いい感じだよ！」など励ます言葉を自然に入れること。\n'
-                '・200文字以内で、小学生でも理解できるくらいやさしく答える。'
+                '・回答は一文だけで答える。'
             )
 
         # ── モード別タスク ──
         mode_task = {
-            'discard': f'手牌「{hand_str}」から何を捨てるべきか、理由とともに具体的に答えてください。',
+            'discard': f'手牌「{hand_str}」から何を捨てるべきか、理由を一言だけ添えて答えてください。',
             'yaku':    f'手牌「{hand_str}」で狙える役と、その完成に必要な牌を答えてください。',
             'rule':    f'質問「{context}」に対して、正確なルールを答えてください。',
             'general': f'手牌「{hand_str}」について「{context}」',
         }.get(mode, f'手牌「{hand_str}」について「{context}」')
 
-        user_prompt = mode_task + '\n\n' + level_style
+        wants_discard = mode == 'discard' or '何を切' in context or '捨てる' in context
+        one_line_rule = (
+            '回答は必ず「〇〇切り。理由」の形にしてください。'
+            if wants_discard else
+            '回答は一文だけにしてください。'
+        )
+        user_prompt = mode_task + '\n\n' + level_style + '\n' + one_line_rule + '\n余計な説明、候補比較、今後の方針は不要です。'
 
         temperature = 0.55 if level == 'advanced' else 0.35
 
         advice, model = generate_gemini_text(
             user_prompt,
             MAHJONG_KNOWLEDGE,
-            max_output_tokens=450,
+            max_output_tokens=90,
             temperature=temperature,
         )
         return jsonify({'advice': advice, 'model': model})
@@ -450,6 +453,8 @@ def mahjong_advice():
     prompt = (
         '以下の対局状況を見て、今おすすめの打牌を1つ選んでください。\n'
         '必ず allowedDiscards に含まれる牌IDだけを discard に入れてください。\n'
+        'reason は「受けが広いから」「安全牌だから」のように20文字前後で、理由だけを書いてください。\n'
+        '長い解説、候補比較、次の方針は不要です。\n'
         '返答はJSONオブジェクトのみです。\n\n'
         'allowedDiscards:\n'
         + json.dumps(hand, ensure_ascii=False)
@@ -459,18 +464,12 @@ def mahjong_advice():
         + json.dumps({
             'discard': '牌ID',
             'tileName': '表示用の牌名',
-            'reason': '全体の短い結論',
-            'detailedReason': {
-                'efficiency': '和了効率・受け入れ・待ちの強さ・形の説明',
-                'value': '期待できる役・打点・ドラや赤牌の価値の説明',
-                'risk': '捨て牌読み・安全度・放銃リスクの説明'
-            },
-            'nextAdvice': '次のツモ、鳴き、リーチ、三麻なら北抜きなど今後の方針',
+            'reason': '理由だけを20文字前後',
+            'detailedReason': {},
+            'nextAdvice': '',
             'confidence': 0.0,
-            'candidates': [
-                {'tile': '牌ID', 'tileName': '表示用の牌名', 'reason': '候補理由'}
-            ],
-            'warning': '注意点があれば。なければ空文字',
+            'candidates': [],
+            'warning': '',
         }, ensure_ascii=False)
     )
 
@@ -478,7 +477,7 @@ def mahjong_advice():
         text, model = generate_gemini_text(
             prompt,
             ADVICE_SYSTEM_PROMPT,
-            max_output_tokens=900,
+            max_output_tokens=220,
             temperature=0.25,
             response_json=True,
         )

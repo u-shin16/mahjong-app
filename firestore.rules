@@ -18,8 +18,8 @@ service cloud.firestore {
       return data.playerCount in [3, 4]
         && data.players is list
         && data.playerUids is list
-        && data.players.size() == data.playerUids.size()
-        && data.players.size() <= data.playerCount;
+        && data.players.size() <= data.playerCount
+        && data.playerUids.size() <= data.players.size();
     }
 
     function isHost() {
@@ -34,7 +34,7 @@ service cloud.firestore {
 
     function isJoiningSelf() {
       return resource.data.status == 'waiting'
-        && changedOnly(['players', 'playerUids'])
+        && changedOnly(['players', 'playerUids', 'readyMap'])
         && validRoomData(request.resource.data)
         && request.resource.data.playerUids.size() == resource.data.playerUids.size() + 1
         && !(request.auth.uid in resource.data.playerUids)
@@ -43,11 +43,32 @@ service cloud.firestore {
 
     function isLeavingSelf() {
       return resource.data.status == 'waiting'
-        && changedOnly(['players', 'playerUids'])
+        && changedOnly(['players', 'playerUids', 'readyMap'])
         && validRoomData(request.resource.data)
         && request.resource.data.playerUids.size() == resource.data.playerUids.size() - 1
         && request.auth.uid in resource.data.playerUids
         && !(request.auth.uid in request.resource.data.playerUids);
+    }
+
+    function isHostWaitingUpdate() {
+      return isHost()
+        && resource.data.status == 'waiting'
+        && changedOnly(['players', 'playerUids', 'playerCount', 'rules', 'readyMap', 'updatedAt'])
+        && request.resource.data.status == 'waiting'
+        && validRoomData(request.resource.data);
+    }
+
+    function isUpdatingOwnReady() {
+      return resource.data.status == 'waiting'
+        && isParticipant()
+        && changedOnly(['readyMap'])
+        && request.resource.data.readyMap[request.auth.uid] is bool;
+    }
+
+    function isUpdatingPresence() {
+      return isParticipant()
+        && changedOnly(['presence'])
+        && request.resource.data.presence[request.auth.uid] is int;
     }
 
     function isSendingOwnAction() {
@@ -96,6 +117,9 @@ service cloud.firestore {
         && (
           isJoiningSelf()
           || isLeavingSelf()
+          || isHostWaitingUpdate()
+          || isUpdatingOwnReady()
+          || isUpdatingPresence()
           || isSendingOwnAction()
           || isHostGameUpdate()
           || isRecreatingEndedRoom()

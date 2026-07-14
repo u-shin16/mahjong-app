@@ -1,9 +1,9 @@
 'use strict';
 
 /* ============================================================
-   FriendGame: 友人戦（合言葉ルームのオンライン対戦）
+   FriendGame: 友人戦（6桁ルームIDのオンライン対戦）
    ------------------------------------------------------------
-   - Firestore の rooms/{合言葉} 1 ドキュメントで部屋を管理
+   - Firestore の rooms/{ルームID} 1 ドキュメントで部屋を管理
    - 部屋を作った人（ホスト）の端末がゲーム進行役になる
    - ルールは CPU 戦（battle.js）の簡易対局に合わせる
      * 3人打ち / 4人打ち
@@ -21,8 +21,80 @@ var FriendGame = (function() {
   var _listeners = [];
   var _lastProcessedSeq = -1;
   var _lastError = null;
+  var _heartbeatTimer = null;
+  var _hostLoopTimer = null;
 
   var BASE_SCORES = [1000, 2000, 3900, 7700, 8000, 12000, 16000];
+  var CPU_UID_PREFIX = 'cpu:';
+  var HEARTBEAT_MS = 4000;
+  var DISCONNECT_MS = 15000;
+  var HOST_TICK_MS = 700;
+
+  function defaultRules(playerCount) {
+    playerCount = playerCount === 3 ? 3 : 4;
+    return {
+      playerCount: playerCount,
+      gameType: 'tonpu',
+      startScore: playerCount === 3 ? 35000 : 25000,
+      suddenDeath: false,
+      baseSeconds: 5,
+      reserveSeconds: 20,
+    };
+  }
+
+  function normalizeRules(rules, playerCount) {
+    var base = defaultRules(playerCount);
+    rules = rules || {};
+    var n = rules.playerCount === 3 ? 3 : (rules.playerCount === 4 ? 4 : base.playerCount);
+    var start = parseInt(rules.startScore, 10);
+    var baseSec = parseInt(rules.baseSeconds, 10);
+    var reserveSec = parseInt(rules.reserveSeconds, 10);
+    return {
+      playerCount: n,
+      gameType: rules.gameType === 'hanchan' ? 'hanchan' : 'tonpu',
+      startScore: isFinite(start) && start >= 10000 && start <= 60000 ? start : (n === 3 ? 35000 : 25000),
+      suddenDeath: !!rules.suddenDeath,
+      baseSeconds: isFinite(baseSec) && baseSec >= 3 && baseSec <= 15 ? baseSec : 5,
+      reserveSeconds: isFinite(reserveSec) && reserveSec >= 0 && reserveSec <= 120 ? reserveSec : 20,
+    };
+  }
+
+  function getRoundLimit(gameType, playerCount) {
+    return (gameType === 'hanchan' ? 2 : 1) * playerCount;
+  }
+
+  function humanUids(players) {
+    return (players || []).filter(function(p) { return !p.isCpu; }).map(function(p) { return p.uid; });
+  }
+
+  function isCpuPlayer(p) {
+    return !!(p && (p.isCpu || String(p.uid || '').indexOf(CPU_UID_PREFIX) === 0));
+  }
+
+  function isCpuSeat(seat) {
+    return !!(_room && _room.players && isCpuPlayer(_room.players[seat]));
+  }
+
+  function readyMapFor(players, oldMap) {
+    var map = {};
+    oldMap = oldMap || {};
+    (players || []).forEach(function(p) {
+      if (!isCpuPlayer(p)) map[p.uid] = !!oldMap[p.uid];
+    });
+    return map;
+  }
+
+  function allPlayersReady(room) {
+    if (!room || room.status !== 'waiting') return false;
+    var players = room.players || [];
+    if (players.length !== room.playerCount) return false;
+    var readyMap = room.readyMap || {};
+    return players.every(function(p) { return isCpuPlayer(p) || readyMap[p.uid] === true; });
+  }
+
+  function randomRoomCode() {
+    return String(Math.floor(100000 + Math.random() * 900000));
+  }
 
   function db() {
     if (!_db) _db = firebase.firestore();
@@ -55,15 +127,12 @@ var FriendGame = (function() {
   }
 
   function normalizeCode(code) {
-    return String(code || '').trim().replace(/\s+/g, ' ');
+    return String(code || '').replace(/\D/g, '').slice(0, 6);
   }
 
   function validateCode(code) {
-    if (!code) throw new Error('合言葉を入力してください');
-    if (code.length > 40) throw new Error('合言葉は40文字以内にしてください');
-    if (code.indexOf('/') >= 0) throw new Error('合言葉に「/」は使えません');
-    if (code === '.' || code === '..') throw new Error('別の合言葉を使ってください');
-    if (/^__.*__$/.test(code)) throw new Error('別の合言葉を使ってください');
+    if (!code) throw new Error('6桁のルームIDを入力してください');
+    if (!/^\d{6}$/.test(code)) throw new Error('ルームIDは6桁の数字で入力してください');
   }
 
   function playerName(u) {
@@ -80,15 +149,51 @@ var FriendGame = (function() {
     return room && room.players && room.players[seat] ? room.players[seat].uid : null;
   }
 
+  function _sendHeartbeat() {
+    if (!_code || !me() || !_room) return;
+    if ((_room.playerUids || []).indexOf(me().uid) < 0) return;
+    var patch = {};
+    patch['presence.' + me().uid] = Date.now();
+    roomRef(_code).update(patch)['catch'](function(e) {
+      _lastError = e;
+    });
+  }
+
+  function _startHeartbeat() {
+    if (_heartbeatTimer) clearInterval(_heartbeatTimer);
+    _sendHeartbeat();
+    _heartbeatTimer = setInterval(_sendHeartbeat, HEARTBEAT_MS);
+  }
+
+  function _stopHeartbeat() {
+    if (_heartbeatTimer) clearInterval(_heartbeatTimer);
+    _heartbeatTimer = null;
+  }
+
+  function _syncHostLoop() {
+    var shouldRun = !!(_room && me() && _room.hostUid === me().uid);
+    if (shouldRun && !_hostLoopTimer) {
+      _hostLoopTimer = setInterval(function() {
+        if (_room && _game && _room.hostUid === me().uid) _hostProcess();
+      }, HOST_TICK_MS);
+    } else if (!shouldRun && _hostLoopTimer) {
+      clearInterval(_hostLoopTimer);
+      _hostLoopTimer = null;
+    }
+  }
+
   /* ---------- 部屋の購読 ---------- */
   function _subscribe(code) {
     _unsubscribe();
     _code = code;
+    _startHeartbeat();
     _unsub = roomRef(code).onSnapshot(function(snap) {
       _lastError = null;
-      if (!snap.exists) { _room = null; _game = null; _notify(); return; }
+      if (!snap.exists) { _room = null; _game = null; _syncHostLoop(); _notify(); return; }
       _room = snap.data();
       _game = parseGame(_room.game);
+      _sendHeartbeat();
+      _syncHostLoop();
       if (_room.hostUid === me().uid) _hostProcess();
       _notify();
     }, function(e) {
@@ -104,33 +209,48 @@ var FriendGame = (function() {
     _game = null;
     _code = null;
     _lastProcessedSeq = -1;
+    _stopHeartbeat();
+    _syncHostLoop();
   }
 
   /* ---------- 部屋を作る / 参加する / 退出 ---------- */
   function createRoom(code, playerCount) {
     var u = me();
     code = normalizeCode(code);
-    validateCode(code);
     playerCount = playerCount === 3 ? 3 : 4;
+    var manualCode = !!code;
 
-    return roomRef(code).get().then(function(snap) {
-      if (snap.exists) {
-        var d = snap.data();
-        if (d.status !== 'ended') throw new Error('この合言葉の部屋はすでに使われています。別の合言葉にしてください');
-      }
-      return roomRef(code).set({
-        code: code,
-        hostUid: u.uid,
-        playerCount: playerCount,
-        status: 'waiting',
-        players: [{ uid: u.uid, name: playerName(u) }],
-        playerUids: [u.uid],
-        game: null,
-        action: null,
-        version: 2,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      });
-    }).then(function() { _subscribe(code); });
+    function tryCreate(candidate, remain) {
+      validateCode(candidate);
+      return roomRef(candidate).get().then(function(snap) {
+        if (snap.exists) {
+          var d = snap.data();
+          if (d.status !== 'ended') {
+            if (!manualCode && remain > 0) return tryCreate(randomRoomCode(), remain - 1);
+            throw new Error('このルームIDの部屋はすでに使われています。別のIDにしてください');
+          }
+        }
+        var rules = defaultRules(playerCount);
+        var players = [{ uid: u.uid, name: playerName(u), isCpu: false }];
+        return roomRef(candidate).set({
+          code: candidate,
+          hostUid: u.uid,
+          playerCount: playerCount,
+          rules: rules,
+          readyMap: readyMapFor(players),
+          presence: {},
+          status: 'waiting',
+          players: players,
+          playerUids: [u.uid],
+          game: null,
+          action: null,
+          version: 3,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+      }).then(function() { _subscribe(candidate); });
+    }
+
+    return tryCreate(code || randomRoomCode(), 8);
   }
 
   function joinRoom(code) {
@@ -140,17 +260,19 @@ var FriendGame = (function() {
 
     return db().runTransaction(function(tx) {
       return tx.get(roomRef(code)).then(function(snap) {
-        if (!snap.exists) throw new Error('その合言葉の部屋が見つかりません');
+        if (!snap.exists) throw new Error('そのルームIDの部屋が見つかりません');
         var d = snap.data();
         d.players = d.players || [];
-        d.playerUids = d.playerUids || d.players.map(function(p) { return p.uid; });
+        d.playerUids = d.playerUids || humanUids(d.players);
+        d.readyMap = d.readyMap || {};
         var already = d.players.some(function(p) { return p.uid === u.uid; });
         if (already) return;
         if (d.status !== 'waiting') throw new Error('この部屋はすでに対局中です');
         if (d.players.length >= d.playerCount) throw new Error('この部屋は満員です');
-        d.players.push({ uid: u.uid, name: playerName(u) });
+        d.players.push({ uid: u.uid, name: playerName(u), isCpu: false });
         d.playerUids.push(u.uid);
-        tx.update(roomRef(code), { players: d.players, playerUids: d.playerUids });
+        d.readyMap[u.uid] = false;
+        tx.update(roomRef(code), { players: d.players, playerUids: d.playerUids, readyMap: d.readyMap });
       });
     }).then(function() { _subscribe(code); });
   }
@@ -168,10 +290,85 @@ var FriendGame = (function() {
     }
     if (room.status === 'waiting') {
       var rest = (room.players || []).filter(function(p) { return p.uid !== u.uid; });
-      var restUids = rest.map(function(p) { return p.uid; });
-      return roomRef(code).update({ players: rest, playerUids: restUids })['catch'](function() {});
+      var restReady = readyMapFor(rest, room.readyMap);
+      return roomRef(code).update({ players: rest, playerUids: humanUids(rest), readyMap: restReady })['catch'](function() {});
     }
     return Promise.resolve();
+  }
+
+  function setReady(flag) {
+    if (!_room || !_code || !me() || _room.status !== 'waiting') return Promise.resolve();
+    var patch = {};
+    patch['readyMap.' + me().uid] = !!flag;
+    return roomRef(_code).update(patch);
+  }
+
+  function updateRules(patch) {
+    if (!isHost() || !_room || _room.status !== 'waiting') return Promise.reject(new Error('ホストだけがルールを変更できます'));
+    patch = patch || {};
+    return db().runTransaction(function(tx) {
+      return tx.get(roomRef(_code)).then(function(snap) {
+        if (!snap.exists) throw new Error('部屋が見つかりません');
+        var d = snap.data();
+        if (d.status !== 'waiting') throw new Error('対局中はルールを変更できません');
+        var players = d.players || [];
+        var currentRules = normalizeRules(d.rules, d.playerCount);
+        var nextRules = normalizeRules(Object.assign({}, currentRules, patch), patch.playerCount || d.playerCount);
+        var humanCount = players.filter(function(p) { return !isCpuPlayer(p); }).length;
+        if (humanCount > nextRules.playerCount) throw new Error('参加中の人数より少ない人数には変更できません');
+        players = players.slice(0, nextRules.playerCount);
+        tx.update(roomRef(_code), {
+          playerCount: nextRules.playerCount,
+          rules: nextRules,
+          players: players,
+          playerUids: humanUids(players),
+          readyMap: readyMapFor(players),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+    });
+  }
+
+  function addCpu() {
+    if (!isHost() || !_room || _room.status !== 'waiting') return Promise.reject(new Error('ホストだけがCPUを追加できます'));
+    return db().runTransaction(function(tx) {
+      return tx.get(roomRef(_code)).then(function(snap) {
+        if (!snap.exists) throw new Error('部屋が見つかりません');
+        var d = snap.data();
+        var players = d.players || [];
+        if (d.status !== 'waiting') throw new Error('対局中はCPUを追加できません');
+        if (players.length >= d.playerCount) throw new Error('空き席がありません');
+        var seat = players.length;
+        players.push({
+          uid: CPU_UID_PREFIX + _code + ':' + seat + ':' + Date.now(),
+          name: 'CPU' + ['東', '南', '西', '北'][seat],
+          isCpu: true,
+        });
+        tx.update(roomRef(_code), {
+          players: players,
+          playerUids: humanUids(players),
+          readyMap: readyMapFor(players, d.readyMap),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+    });
+  }
+
+  function removeCpu(uid) {
+    if (!isHost() || !_room || _room.status !== 'waiting') return Promise.reject(new Error('ホストだけがCPUを外せます'));
+    return db().runTransaction(function(tx) {
+      return tx.get(roomRef(_code)).then(function(snap) {
+        if (!snap.exists) throw new Error('部屋が見つかりません');
+        var d = snap.data();
+        var players = (d.players || []).filter(function(p) { return !(p.uid === uid && isCpuPlayer(p)); });
+        tx.update(roomRef(_code), {
+          players: players,
+          playerUids: humanUids(players),
+          readyMap: readyMapFor(players, d.readyMap),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+    });
   }
 
   /* ---------- 便利関数 ---------- */
@@ -262,8 +459,110 @@ var FriendGame = (function() {
     return res;
   }
 
+  function defaultAutoFlags(seat) {
+    return {
+      agari: isCpuSeat(seat),
+      tsumogiri: isCpuSeat(seat),
+      noCalls: isCpuSeat(seat),
+    };
+  }
+
+  function ensureRuntimeArrays(state) {
+    var n = state.playerCount || 4;
+    state.rules = normalizeRules(state.rules, n);
+    if (!state.autoFlags || state.autoFlags.length !== n) {
+      state.autoFlags = makeArray(n, function(i) { return defaultAutoFlags(i); });
+    }
+    if (!state.timeBankMs || state.timeBankMs.length !== n) {
+      state.timeBankMs = makeArray(n, state.rules.reserveSeconds * 1000);
+    }
+    if (!state.disconnected || state.disconnected.length !== n) {
+      state.disconnected = makeArray(n, false);
+    }
+  }
+
+  function getAutoFlags(state, seat) {
+    ensureRuntimeArrays(state);
+    return state.autoFlags[seat] || defaultAutoFlags(seat);
+  }
+
+  function seatDisconnected(state, seat) {
+    return !!(state && state.disconnected && state.disconnected[seat]);
+  }
+
+  function shouldSkipReactions(state, seat) {
+    var f = getAutoFlags(state, seat);
+    return isCpuSeat(seat) || seatDisconnected(state, seat) || !!f.tsumogiri || !!f.noCalls || !!(state.riichi && state.riichi[seat]);
+  }
+
+  function shouldAutoAgari(state, seat) {
+    var f = getAutoFlags(state, seat);
+    return isCpuSeat(seat) || seatDisconnected(state, seat) || !!f.agari;
+  }
+
+  function _startTurnTimer(state, seat) {
+    ensureRuntimeArrays(state);
+    var now = Date.now();
+    var baseMs = state.rules.baseSeconds * 1000;
+    var reserveMs = Math.max(0, state.timeBankMs[seat] || 0);
+    state.turnTimer = {
+      seat: seat,
+      phase: state.phase,
+      startedAt: now,
+      baseMs: baseMs,
+      reserveMs: reserveMs,
+      deadlineAt: now + baseMs + reserveMs,
+      canAutoAt: now + (isCpuSeat(seat) ? 700 : 450),
+    };
+  }
+
+  function _clearTurnTimer(state) {
+    state.turnTimer = null;
+  }
+
+  function _consumeTurnTimer(state, seat) {
+    ensureRuntimeArrays(state);
+    var timer = state.turnTimer;
+    if (!timer || timer.seat !== seat) return;
+    var usedReserve = Math.max(0, Date.now() - timer.startedAt - timer.baseMs);
+    state.timeBankMs[seat] = Math.max(0, timer.reserveMs - usedReserve);
+    _clearTurnTimer(state);
+  }
+
+  function _findDrawnIdx(state, seat) {
+    var hand = (state.hands && state.hands[seat]) || [];
+    if (state.drawnId) {
+      for (var i = 0; i < hand.length; i++) {
+        if (hand[i].id === state.drawnId) return i;
+      }
+    }
+    return hand.length - 1;
+  }
+
+  function _cpuChooseDiscard(state, seat) {
+    var hand = state.hands[seat] || [];
+    var drawn = _findDrawnIdx(state, seat);
+    if (state.riichi && state.riichi[seat] && drawn >= 0) return drawn;
+    var best = drawn >= 0 ? drawn : Math.max(0, hand.length - 1);
+    var bestScore = -999;
+    for (var i = 0; i < hand.length; i++) {
+      var t = hand[i];
+      var score = 0;
+      if (t.suit === 'wind' || t.suit === 'dragon') score += 4;
+      if (t.suit !== 'wind' && t.suit !== 'dragon' && (t.num === 1 || t.num === 9)) score += 2;
+      if (state.drawnId && t.id === state.drawnId) score += 0.8;
+      var same = countMatch(hand, t);
+      if (same >= 2) score -= 3;
+      var dora = doraFromInd(state.doraInd);
+      if (sameKind(t, dora)) score -= 5;
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    return best;
+  }
+
   /* ---------- ゲーム状態の生成（ホスト） ---------- */
   function _deal(state) {
+    ensureRuntimeArrays(state);
     var wall = state.isSanma ? Tiles.makeSanmaFull() : Tiles.makeFull();
     var n = state.playerCount;
     state.hands = [];
@@ -278,6 +577,8 @@ var FriendGame = (function() {
     state.wall = wall;
     state.riichi = makeArray(n, false);
     state.riichiWaits = makeArray(n, function() { return []; });
+    state.timeBankMs = makeArray(n, state.rules.reserveSeconds * 1000);
+    state.disconnected = makeArray(n, false);
     state.nuki = makeArray(n, function() { return []; });
     state.melds = makeArray(n, function() { return []; });
     state.turn = (state.round - 1) % n;
@@ -286,6 +587,7 @@ var FriendGame = (function() {
     state.result = null;
     state.ron = null;
     state.call = null;
+    state.lastAutoAt = 0;
     _drawFor(state, state.turn);
   }
 
@@ -294,6 +596,7 @@ var FriendGame = (function() {
       state.phase = 'hand_end';
       state.result = { type: 'ryukyoku', deltas: state.scores.map(function() { return 0; }) };
       state.drawnId = null;
+      _clearTurnTimer(state);
       return null;
     }
     var t = state.wall.pop();
@@ -301,6 +604,7 @@ var FriendGame = (function() {
     state.turn = seat;
     state.drawnId = t.id;
     state.phase = 'turn';
+    _startTurnTimer(state, seat);
     return t;
   }
 
@@ -308,14 +612,22 @@ var FriendGame = (function() {
     if (!isHost() || !_room || (_room.players || []).length !== _room.playerCount) {
       return Promise.reject(new Error('メンバーが揃っていません'));
     }
+    if (!allPlayersReady(_room)) {
+      return Promise.reject(new Error('全員がReadyになるまで開始できません'));
+    }
     var n = _room.playerCount;
+    var rules = normalizeRules(_room.rules, n);
     var state = {
       seq: 0,
       playerCount: n,
       isSanma: n === 3,
+      rules: rules,
       round: 1,
-      roundLimit: n,
-      scores: makeArray(n, n === 3 ? 35000 : 25000),
+      roundLimit: getRoundLimit(rules.gameType, n),
+      scores: makeArray(n, rules.startScore),
+      autoFlags: makeArray(n, function(i) { return defaultAutoFlags(i); }),
+      disconnected: makeArray(n, false),
+      startedAt: Date.now(),
     };
     _deal(state);
     _lastProcessedSeq = -1;
@@ -401,6 +713,7 @@ var FriendGame = (function() {
     state.ron = null;
     state.call = null;
     state.drawnId = null;
+    _clearTurnTimer(state);
   }
 
   function _nextTurn(state, seat) {
@@ -408,7 +721,7 @@ var FriendGame = (function() {
   }
 
   function getCallOptions(state, seat, tile, fromSeat) {
-    if (!state || !tile || state.riichi[seat]) return [];
+    if (!state || !tile || state.riichi[seat] || shouldSkipReactions(state, seat)) return [];
     var hand = state.hands[seat] || [];
     var opts = [];
     var same = hand.filter(function(t) { return sameKind(t, tile); });
@@ -471,6 +784,7 @@ var FriendGame = (function() {
   }
 
   function _setCallWait(state, tile, fromSeat, callMap) {
+    _clearTurnTimer(state);
     state.phase = 'call_wait';
     state.call = {
       tile: tile,
@@ -482,6 +796,7 @@ var FriendGame = (function() {
   }
 
   function _afterDiscard(state, seat, tile) {
+    _clearTurnTimer(state);
     state.ron = null;
     state.call = null;
 
@@ -493,6 +808,12 @@ var FriendGame = (function() {
     var callMap = buildCallMap(state, seat, tile);
 
     if (ronCandidates.length > 0) {
+      var autoWinner = ronCandidates.find(function(c) { return shouldAutoAgari(state, c); });
+      if (autoWinner != null) {
+        state.hands[autoWinner] = Tiles.sortTiles(state.hands[autoWinner].concat([tile]));
+        _finishHand(state, autoWinner, 'ron', seat);
+        return;
+      }
       state.phase = 'ron_wait';
       state.ron = {
         tile: tile,
@@ -546,6 +867,7 @@ var FriendGame = (function() {
       _drawFor(state, seat);
     } else {
       state.phase = 'naki_discard';
+      _startTurnTimer(state, seat);
     }
     return true;
   }
@@ -558,6 +880,7 @@ var FriendGame = (function() {
       if (sameKind(cands[i].tiles[0], tileKind)) { cand = cands[i]; break; }
     }
     if (!cand) return false;
+    _consumeTurnTimer(state, seat);
     removeTilesByIds(state.hands[seat], cand.tiles);
     state.melds[seat].push({ type: 'ankan', tiles: cand.tiles, calledTile: null, fromPlayer: -1 });
     addKanDora(state);
@@ -567,10 +890,38 @@ var FriendGame = (function() {
 
   function _executeNuki(state, seat, tileId) {
     if (!state.isSanma || state.phase !== 'turn' || seat !== state.turn) return false;
+    _consumeTurnTimer(state, seat);
     var idx = findNukiIdx(state, seat, tileId);
     if (idx < 0) return false;
     var tile = state.hands[seat].splice(idx, 1)[0];
     state.nuki[seat].push(tile);
+
+    var ronCandidates = [];
+    for (var i = 0; i < state.playerCount; i++) {
+      if (i === seat) continue;
+      if (Agari.isWinningHand((state.hands[i] || []).concat([tile]))) ronCandidates.push(i);
+    }
+    if (ronCandidates.length > 0) {
+      var autoWinner = ronCandidates.find(function(c) { return shouldAutoAgari(state, c); });
+      if (autoWinner != null) {
+        state.hands[autoWinner] = Tiles.sortTiles(state.hands[autoWinner].concat([tile]));
+        _finishHand(state, autoWinner, 'ron', seat);
+        state.result.yaku = (state.result.yaku || []).filter(function(y) { return y.name !== '槍槓'; });
+        return true;
+      }
+      _clearTurnTimer(state);
+      state.phase = 'ron_wait';
+      state.ron = {
+        tile: tile,
+        from: seat,
+        candidates: ronCandidates,
+        responses: {},
+        callOptionsBySeat: {},
+        isYarikita: true,
+      };
+      return true;
+    }
+
     _drawFor(state, seat);
     return true;
   }
@@ -583,6 +934,7 @@ var FriendGame = (function() {
     var tile = hand[idx];
 
     if (state.riichi[seat] && tile.id !== state.drawnId) return false;
+    _consumeTurnTimer(state, seat);
     if (riichi) {
       var rest = hand.filter(function(_, i) { return i !== idx; });
       var waits = getValidWaits(state, rest);
@@ -601,79 +953,214 @@ var FriendGame = (function() {
     return true;
   }
 
-  function _hostProcess() {
-    var a = _room.action;
-    var state = _game;
-    if (!a || !state) return;
-    if (a.seq !== state.seq) return;
-    if (a.seq <= _lastProcessedSeq) return;
-    if (a.seat == null || a.seat < 0 || a.seat >= state.playerCount) return;
-    if (playerUidAt(_room, a.seat) !== a.uid) return;
+  function _syncDisconnects(state) {
+    ensureRuntimeArrays(state);
+    var changed = false;
+    var now = Date.now();
+    var presence = (_room && _room.presence) || {};
+    var players = (_room && _room.players) || [];
+    for (var i = 0; i < state.playerCount; i++) {
+      var p = players[i];
+      var disconnected = false;
+      if (p && !isCpuPlayer(p)) {
+        var last = presence[p.uid] || state.startedAt || now;
+        disconnected = (now - last) > DISCONNECT_MS;
+      }
+      if (state.disconnected[i] !== disconnected) {
+        state.disconnected[i] = disconnected;
+        changed = true;
+      }
+    }
+    return changed;
+  }
 
-    var seat = a.seat;
-    var ok = false;
+  function _advanceRoundOrEnd(state) {
+    var rules = normalizeRules(state.rules, state.playerCount);
+    if (state.round >= state.roundLimit) {
+      if (!rules.suddenDeath) {
+        state.phase = 'match_end';
+        return;
+      }
+      var target = Math.max(rules.startScore + 5000, state.playerCount === 3 ? 40000 : 30000);
+      var top = Math.max.apply(null, state.scores || []);
+      if (top >= target) {
+        state.phase = 'match_end';
+        return;
+      }
+      state.roundLimit += state.playerCount;
+    }
+    state.round++;
+    _deal(state);
+  }
 
-    if (a.type === 'discard' || a.type === 'riichi') {
-      ok = _discard(state, seat, a.idx, a.type === 'riichi');
+  function _resolveRonPasses(state) {
+    var from = state.ron.from;
+    var tile = state.ron.tile;
+    var callMap = state.ron.callOptionsBySeat || {};
+    state.ron = null;
+    if (hasCallOptions(callMap)) _setCallWait(state, tile, from, callMap);
+    else _nextTurn(state, from);
+  }
 
-    } else if (a.type === 'tsumo') {
-      if (state.phase === 'turn' && seat === state.turn && Agari.isWinningHand(state.hands[seat])) {
+  function _hostTick(state) {
+    if (!state || state.phase === 'hand_end' || state.phase === 'match_end') return false;
+    ensureRuntimeArrays(state);
+    var changed = _syncDisconnects(state);
+    var now = Date.now();
+
+    if (state.phase === 'ron_wait' && state.ron) {
+      for (var r = 0; r < state.ron.candidates.length; r++) {
+        var rc = state.ron.candidates[r];
+        if (shouldAutoAgari(state, rc)) {
+          state.hands[rc] = Tiles.sortTiles(state.hands[rc].concat([state.ron.tile]));
+          _finishHand(state, rc, 'ron', state.ron.from);
+          return true;
+        }
+      }
+      state.ron.candidates.forEach(function(c) {
+        if (shouldSkipReactions(state, c) && state.ron.responses[c] !== 'pass') {
+          state.ron.responses[c] = 'pass';
+          changed = true;
+        }
+      });
+      if (state.ron.candidates.every(function(c) { return state.ron.responses[c] === 'pass'; })) {
+        _resolveRonPasses(state);
+        return true;
+      }
+      return changed;
+    }
+
+    if (state.phase === 'call_wait' && state.call) {
+      state.call.candidates.forEach(function(c) {
+        if (shouldSkipReactions(state, c) && state.call.responses[c] !== 'pass') {
+          state.call.responses[c] = 'pass';
+          changed = true;
+        }
+      });
+      if (state.call.candidates.every(function(c) { return state.call.responses[c] === 'pass'; })) {
+        var fromSeat = state.call.from;
+        state.call = null;
+        _nextTurn(state, fromSeat);
+        return true;
+      }
+      return changed;
+    }
+
+    if ((state.phase === 'turn' || state.phase === 'naki_discard') && state.turn != null) {
+      var seat = state.turn;
+      if (!state.turnTimer || state.turnTimer.seat !== seat) {
+        _startTurnTimer(state, seat);
+        changed = true;
+      }
+      var timer = state.turnTimer;
+      var flags = getAutoFlags(state, seat);
+      var canWin = state.phase === 'turn' && Agari.isWinningHand(state.hands[seat] || []);
+      if (canWin && shouldAutoAgari(state, seat) && now >= timer.canAutoAt) {
+        _consumeTurnTimer(state, seat);
         _finishHand(state, seat, 'tsumo', null);
-        ok = true;
+        return true;
       }
-
-    } else if (a.type === 'nuki') {
-      ok = _executeNuki(state, seat, a.tileId);
-
-    } else if (a.type === 'ankan') {
-      ok = _executeAnkan(state, seat, a.tile);
-
-    } else if (a.type === 'ron' || a.type === 'pass') {
-      if (state.phase === 'ron_wait' && state.ron && state.ron.candidates.indexOf(seat) >= 0) {
-        if (a.type === 'ron') {
-          state.hands[seat] = Tiles.sortTiles(state.hands[seat].concat([state.ron.tile]));
-          _finishHand(state, seat, 'ron', state.ron.from);
-          ok = true;
-        } else {
-          state.ron.responses[seat] = 'pass';
-          var allRonPassed = state.ron.candidates.every(function(c) { return state.ron.responses[c] === 'pass'; });
-          if (allRonPassed) {
-            var from = state.ron.from;
-            var tile = state.ron.tile;
-            var callMap = state.ron.callOptionsBySeat || {};
-            state.ron = null;
-            if (hasCallOptions(callMap)) _setCallWait(state, tile, from, callMap);
-            else _nextTurn(state, from);
-          }
-          ok = true;
+      if (state.phase === 'turn' && state.isSanma && isCpuSeat(seat)) {
+        var nukiIdx = findNukiIdx(state, seat, null);
+        if (nukiIdx >= 0 && now >= timer.canAutoAt) {
+          _executeNuki(state, seat, (state.hands[seat] || [])[nukiIdx].id);
+          return true;
         }
-      } else if (state.phase === 'call_wait' && state.call && state.call.candidates.indexOf(seat) >= 0 && a.type === 'pass') {
-        state.call.responses[seat] = 'pass';
-        var allCallPassed = state.call.candidates.every(function(c) { return state.call.responses[c] === 'pass'; });
-        if (allCallPassed) {
-          var fromSeat = state.call.from;
-          state.call = null;
-          _nextTurn(state, fromSeat);
-        }
-        ok = true;
       }
-
-    } else if (a.type === 'call') {
-      if (state.phase === 'call_wait') ok = _executeCall(state, seat, a.optionIdx, a.callType);
-
-    } else if (a.type === 'next_round') {
-      if (state.phase === 'hand_end' && a.uid === _room.hostUid) {
-        if (state.round >= state.roundLimit) state.phase = 'match_end';
-        else {
-          state.round++;
-          _deal(state);
-        }
-        ok = true;
+      var autoDiscard = isCpuSeat(seat) || seatDisconnected(state, seat) || !!flags.tsumogiri || (!!state.riichi[seat] && !canWin);
+      var dueAuto = autoDiscard && now >= timer.canAutoAt;
+      var dueTimeout = now >= timer.deadlineAt;
+      if (dueAuto || dueTimeout) {
+        var idx = isCpuSeat(seat) && !dueTimeout ? _cpuChooseDiscard(state, seat) : _findDrawnIdx(state, seat);
+        _discard(state, seat, idx, false);
+        return true;
       }
     }
 
-    if (ok) {
-      _lastProcessedSeq = a.seq;
+    return changed;
+  }
+
+  function _hostProcess() {
+    var state = _game;
+    if (!state || !_room) return;
+    var a = _room.action;
+    var ok = false;
+    var processedAction = false;
+
+    if (a && a.seq === state.seq && a.seq > _lastProcessedSeq &&
+        a.seat != null && a.seat >= 0 && a.seat < state.playerCount &&
+        playerUidAt(_room, a.seat) === a.uid) {
+      var seat = a.seat;
+
+      if (a.type === 'discard' || a.type === 'riichi') {
+        ok = _discard(state, seat, a.idx, a.type === 'riichi');
+
+      } else if (a.type === 'tsumo') {
+        if (state.phase === 'turn' && seat === state.turn && Agari.isWinningHand(state.hands[seat])) {
+          _consumeTurnTimer(state, seat);
+          _finishHand(state, seat, 'tsumo', null);
+          ok = true;
+        }
+
+      } else if (a.type === 'nuki') {
+        ok = _executeNuki(state, seat, a.tileId);
+
+      } else if (a.type === 'ankan') {
+        ok = _executeAnkan(state, seat, a.tile);
+
+      } else if (a.type === 'auto_flags') {
+        ensureRuntimeArrays(state);
+        var old = getAutoFlags(state, seat);
+        state.autoFlags[seat] = {
+          agari: !!(a.flags && a.flags.agari),
+          tsumogiri: !!(a.flags && a.flags.tsumogiri),
+          noCalls: !!(a.flags && a.flags.noCalls),
+        };
+        ok = old.agari !== state.autoFlags[seat].agari ||
+          old.tsumogiri !== state.autoFlags[seat].tsumogiri ||
+          old.noCalls !== state.autoFlags[seat].noCalls;
+
+      } else if (a.type === 'ron' || a.type === 'pass') {
+        if (state.phase === 'ron_wait' && state.ron && state.ron.candidates.indexOf(seat) >= 0) {
+          if (a.type === 'ron') {
+            state.hands[seat] = Tiles.sortTiles(state.hands[seat].concat([state.ron.tile]));
+            _finishHand(state, seat, 'ron', state.ron.from);
+            ok = true;
+          } else {
+            state.ron.responses[seat] = 'pass';
+            if (state.ron.candidates.every(function(c) { return state.ron.responses[c] === 'pass'; })) {
+              _resolveRonPasses(state);
+            }
+            ok = true;
+          }
+        } else if (state.phase === 'call_wait' && state.call && state.call.candidates.indexOf(seat) >= 0 && a.type === 'pass') {
+          state.call.responses[seat] = 'pass';
+          if (state.call.candidates.every(function(c) { return state.call.responses[c] === 'pass'; })) {
+            var fromSeat = state.call.from;
+            state.call = null;
+            _nextTurn(state, fromSeat);
+          }
+          ok = true;
+        }
+
+      } else if (a.type === 'call') {
+        if (state.phase === 'call_wait') ok = _executeCall(state, seat, a.optionIdx, a.callType);
+
+      } else if (a.type === 'next_round') {
+        if (state.phase === 'hand_end' && a.uid === _room.hostUid) {
+          _advanceRoundOrEnd(state);
+          ok = true;
+        }
+      }
+
+      if (ok || a.type === 'auto_flags') {
+        _lastProcessedSeq = a.seq;
+        processedAction = true;
+      }
+    }
+
+    var tickChanged = _hostTick(state);
+    if (processedAction || tickChanged) {
       _publish(state);
     }
   }
@@ -683,6 +1170,10 @@ var FriendGame = (function() {
     createRoom: createRoom,
     joinRoom: joinRoom,
     leaveRoom: leaveRoom,
+    setReady: setReady,
+    updateRules: updateRules,
+    addCpu: addCpu,
+    removeCpu: removeCpu,
     startGame: startGame,
     sendAction: sendAction,
     onChange: function(cb) { _listeners.push(cb); },
@@ -693,6 +1184,11 @@ var FriendGame = (function() {
     code: function() { return _code; },
     mySeat: mySeat,
     isHost: isHost,
+    isCpu: function(seat) { return isCpuSeat(seat); },
+    allReady: function() { return allPlayersReady(_room); },
+    rules: function() { return normalizeRules(_room && _room.rules, _room && _room.playerCount); },
+    autoFlags: function(seat) { return _game ? getAutoFlags(_game, seat) : defaultAutoFlags(seat); },
+    normalizeCode: normalizeCode,
     doraFromInd: doraFromInd,
     isTenpai13: isTenpai13,
     isNukiTile: function(tile) { return isNukiTile(_game, tile); },
